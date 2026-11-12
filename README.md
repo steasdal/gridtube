@@ -21,12 +21,14 @@ node server.js
 ### 2. Docker & Docker Compose
 
 ```bash
-# Build and start with a local ./data volume mounted to /data
-docker compose up -d --build
+# Pull and start from GitHub Container Registry with a local ./data volume mounted to /data
+docker compose up -d
 
-# Or with docker run:
-docker build -t gridtube:latest .
-docker run -d --name gridtube -p 8080:8080 -v "$(pwd)/data:/data" gridtube:latest
+# Or run the develop tag:
+IMAGE_TAG=develop docker compose up -d
+
+# Or with docker run directly:
+docker run -d --name gridtube -p 8080:8080 -v "$(pwd)/data:/data" ghcr.io/steasdal/gridtube:latest
 ```
 
 ### 3. Kubernetes (with PVC)
