@@ -14,10 +14,10 @@ const DEFAULT_GRIDS = [
     id: 'choo-choos',
     name: 'choo-choos',
     feeds: [
-      'https://www.youtube.com/watch?v=4XYbh4Pegzw',
-      'https://www.youtube.com/watch?v=9SLt3AT0rXk',
-      'https://www.youtube.com/watch?v=-lqCofAp-yI',
-      ''
+      { url: 'https://www.youtube.com/watch?v=4XYbh4Pegzw', volume: 100, muted: false },
+      { url: 'https://www.youtube.com/watch?v=9SLt3AT0rXk', volume: 100, muted: false },
+      { url: 'https://www.youtube.com/watch?v=-lqCofAp-yI', volume: 100, muted: false },
+      { url: '', volume: 100, muted: false }
     ],
     createdAt: new Date().toISOString()
   }
@@ -33,6 +33,30 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon'
 };
 
+function normalizeFeedEntry(entry) {
+  if (typeof entry === 'string') {
+    return { url: entry.trim(), volume: 100, muted: false };
+  }
+  if (entry && typeof entry === 'object') {
+    const url = typeof entry.url === 'string' ? entry.url.trim() : '';
+    const rawVol = Number(entry.volume);
+    const volume = Number.isFinite(rawVol)
+      ? Math.max(0, Math.min(100, Math.round(rawVol)))
+      : 100;
+    const muted = Boolean(entry.muted);
+    return { url, volume, muted };
+  }
+  return { url: '', volume: 100, muted: false };
+}
+
+function normalizeGrid(grid) {
+  const rawFeeds = Array.isArray(grid?.feeds) ? grid.feeds : [];
+  return {
+    ...grid,
+    feeds: [0, 1, 2, 3].map((i) => normalizeFeedEntry(rawFeeds[i]))
+  };
+}
+
 async function ensureDataFile() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   if (!fsSync.existsSync(GRIDS_FILE)) {
@@ -45,7 +69,7 @@ async function readGrids() {
   try {
     const raw = await fs.readFile(GRIDS_FILE, 'utf8');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeGrid) : [];
   } catch (err) {
     console.error('Failed to read grids.json, returning empty list:', err.message);
     return [];
@@ -121,15 +145,12 @@ function validateGridPayload(body) {
     return { error: 'Feeds must be an array of up to 4 URLs.' };
   }
 
-  const normalizedFeeds = [0, 1, 2, 3].map((idx) => {
-    const raw = typeof body.feeds[idx] === 'string' ? body.feeds[idx].trim() : '';
-    return raw;
-  });
+  const normalizedFeeds = [0, 1, 2, 3].map((idx) => normalizeFeedEntry(body.feeds[idx]));
 
   for (let i = 0; i < 4; i++) {
-    const raw = normalizedFeeds[i];
-    if (raw !== '') {
-      const videoId = extractYouTubeId(raw);
+    const { url } = normalizedFeeds[i];
+    if (url !== '') {
+      const videoId = extractYouTubeId(url);
       if (!videoId) {
         return { error: `Feed ${i + 1} is not a valid YouTube URL or 11-character video ID.` };
       }

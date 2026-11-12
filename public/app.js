@@ -260,22 +260,132 @@
     return null;
   }
 
-  function buildEmbedUrl(rawUrl) {
-    const videoId = extractYouTubeId(rawUrl);
+  function normalizeFeedEntry(entry) {
+    if (typeof entry === 'string') {
+      return { url: entry.trim(), volume: 100, muted: false };
+    }
+    if (entry && typeof entry === 'object') {
+      const url = typeof entry.url === 'string' ? entry.url.trim() : '';
+      const rawVol = Number(entry.volume);
+      const volume = Number.isFinite(rawVol)
+        ? Math.max(0, Math.min(100, Math.round(rawVol)))
+        : 100;
+      const muted = Boolean(entry.muted);
+      return { url, volume, muted };
+    }
+    return { url: '', volume: 100, muted: false };
+  }
+
+  function buildEmbedUrl(feedEntry) {
+    const feed = normalizeFeedEntry(feedEntry);
+    const videoId = extractYouTubeId(feed.url);
     if (!videoId) return null;
+    const isMuted = feed.muted || feed.volume === 0;
     const params = new URLSearchParams({
       autoplay: '1',
+      mute: isMuted ? '1' : '0',
       playsinline: '1',
-      rel: '0'
+      rel: '0',
+      enablejsapi: '1',
+      origin: window.location.origin
     });
     return `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?${params.toString()}`;
   }
 
-  function buildThumbnailUrl(rawUrl) {
-    const videoId = extractYouTubeId(rawUrl);
+  function buildThumbnailUrl(feedEntry) {
+    const feed = normalizeFeedEntry(feedEntry);
+    const videoId = extractYouTubeId(feed.url);
     if (!videoId) return null;
     return `https://i.ytimg.com/vi/${encodeURIComponent(videoId)}/mqdefault.jpg`;
   }
+
+  // Track initial audio sync per iframe so opening a grid always enforces saved config,
+  // while manual adjustments inside the YouTube player during a session aren't overwritten
+  const iframeAudioSyncState = new WeakMap();
+
+  function postYouTubeCommand(iframe, func, args = []) {
+    if (!iframe?.contentWindow) return;
+    iframe.contentWindow.postMessage(
+      JSON.stringify({ event: 'command', func, args }),
+      '*'
+    );
+  }
+
+  function sendYouTubeAudioCommands(iframe, feedEntry) {
+    if (!iframe?.contentWindow) return;
+    const feed = normalizeFeedEntry(feedEntry);
+    const shouldMute = feed.muted || feed.volume === 0;
+    if (shouldMute) {
+      postYouTubeCommand(iframe, 'setVolume', [feed.volume]);
+      postYouTubeCommand(iframe, 'mute', []);
+    } else {
+      postYouTubeCommand(iframe, 'unMute', []);
+      postYouTubeCommand(iframe, 'setVolume', [feed.volume]);
+    }
+  }
+
+  function registerIframeAudioInit(iframe, paneIndex, feedEntry) {
+    const feed = normalizeFeedEntry(feedEntry);
+    iframeAudioSyncState.set(iframe, {
+      paneIndex,
+      feed,
+      syncedOnPlay: false
+    });
+
+    const startListening = () => {
+      if (!iframe.contentWindow) return;
+      iframe.contentWindow.postMessage(
+        JSON.stringify({
+          event: 'listening',
+          id: `gridtube-pane-${paneIndex}`,
+          channel: 'widget'
+        }),
+        '*'
+      );
+      sendYouTubeAudioCommands(iframe, feed);
+    };
+
+    iframe.addEventListener('load', () => {
+      startListening();
+      setTimeout(startListening, 350);
+      setTimeout(startListening, 1000);
+    });
+  }
+
+  window.addEventListener('message', (event) => {
+    if (!event.origin.includes('youtube.com') && !event.origin.includes('youtube-nocookie.com')) {
+      return;
+    }
+    let data;
+    try {
+      data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+    } catch {
+      return;
+    }
+    if (!data || typeof data !== 'object') return;
+
+    const iframes = streamWall.querySelectorAll('iframe.stream-frame');
+    for (const iframe of iframes) {
+      if (iframe.contentWindow !== event.source) continue;
+      const state = iframeAudioSyncState.get(iframe);
+      if (!state || state.syncedOnPlay) break;
+
+      if (data.event === 'onReady') {
+        sendYouTubeAudioCommands(iframe, state.feed);
+      } else if (data.event === 'onStateChange' && data.info === 1) {
+        sendYouTubeAudioCommands(iframe, state.feed);
+        state.syncedOnPlay = true;
+      } else if (
+        data.event === 'infoDelivery' &&
+        data.info &&
+        data.info.playerState === 1
+      ) {
+        sendYouTubeAudioCommands(iframe, state.feed);
+        state.syncedOnPlay = true;
+      }
+      break;
+    }
+  });
 
   // ==========================================
   // 3. STATE & DOM REFERENCES
@@ -316,6 +426,85 @@
     document.getElementById('feed-url-2'),
     document.getElementById('feed-url-3')
   ];
+  const feedMuteBtns = [
+    document.getElementById('feed-mute-0'),
+    document.getElementById('feed-mute-1'),
+    document.getElementById('feed-mute-2'),
+    document.getElementById('feed-mute-3')
+  ];
+  const feedVolSliders = [
+    document.getElementById('feed-vol-0'),
+    document.getElementById('feed-vol-1'),
+    document.getElementById('feed-vol-2'),
+    document.getElementById('feed-vol-3')
+  ];
+  const feedVolTexts = [
+    document.getElementById('feed-vol-text-0'),
+    document.getElementById('feed-vol-text-1'),
+    document.getElementById('feed-vol-text-2'),
+    document.getElementById('feed-vol-text-3')
+  ];
+  const slotLabels = ['Top-Left Feed', 'Top-Right Feed', 'Bottom-Left Feed', 'Bottom-Right Feed'];
+  const lastNonZeroVolume = [100, 100, 100, 100];
+
+  function syncSliderCssVars(slider) {
+    slider.style.setProperty('--attr-min', slider.min || '0');
+    slider.style.setProperty('--attr-max', slider.max || '100');
+    slider.style.setProperty('--control-value', slider.value);
+  }
+
+  function setFeedAudioControlState(idx, volume, muted) {
+    const clampedVol = Math.max(0, Math.min(100, Math.round(Number(volume) || 0)));
+    const isMuted = Boolean(muted);
+    if (clampedVol > 0) {
+      lastNonZeroVolume[idx] = clampedVol;
+    }
+
+    const muteBtn = feedMuteBtns[idx];
+    const slider = feedVolSliders[idx];
+    const textEl = feedVolTexts[idx];
+
+    slider.value = String(clampedVol);
+    syncSliderCssVars(slider);
+
+    muteBtn.setAttribute('aria-pressed', isMuted ? 'true' : 'false');
+    muteBtn.setAttribute(
+      'aria-label',
+      isMuted ? `Unmute ${slotLabels[idx]}` : `Mute ${slotLabels[idx]}`
+    );
+
+    if (isMuted) {
+      textEl.textContent = 'Muted';
+      slider.setAttribute('aria-valuetext', `${clampedVol}% (Muted)`);
+    } else {
+      textEl.textContent = `${clampedVol}%`;
+      slider.setAttribute('aria-valuetext', `${clampedVol}%`);
+    }
+  }
+
+  for (let i = 0; i < 4; i++) {
+    syncSliderCssVars(feedVolSliders[i]);
+
+    feedMuteBtns[i].addEventListener('click', () => {
+      const currentlyMuted = feedMuteBtns[i].getAttribute('aria-pressed') === 'true';
+      const currentVol = Number(feedVolSliders[i].value);
+      if (currentlyMuted) {
+        const restoredVol = currentVol === 0 ? (lastNonZeroVolume[i] || 100) : currentVol;
+        setFeedAudioControlState(i, restoredVol, false);
+      } else {
+        setFeedAudioControlState(i, currentVol, true);
+      }
+    });
+
+    feedVolSliders[i].addEventListener('input', () => {
+      const val = Number(feedVolSliders[i].value);
+      if (val === 0) {
+        setFeedAudioControlState(i, 0, true);
+      } else {
+        setFeedAudioControlState(i, val, false);
+      }
+    });
+  }
   const formServerError = document.getElementById('form-server-error');
   const saveGridBtn = document.getElementById('save-grid-btn');
 
@@ -480,53 +669,100 @@
     }
   }
 
+  const slotPositions = ['Top-Left', 'Top-Right', 'Bottom-Left', 'Bottom-Right'];
+
+  function createPlayerPaneElement(grid, i, feedEntry) {
+    const feed = normalizeFeedEntry(feedEntry);
+    const videoId = extractYouTubeId(feed.url) || '';
+    const embedUrl = buildEmbedUrl(feed);
+    const pane = document.createElement('div');
+    pane.className = 'stream-pane';
+    pane.dataset.videoId = videoId;
+
+    if (embedUrl) {
+      const iframe = document.createElement('iframe');
+      iframe.className = 'stream-frame';
+      iframe.src = embedUrl;
+      iframe.title = `${grid.name} — Pane ${i + 1} (${slotPositions[i]}) YouTube Live Feed`;
+      iframe.allow =
+        'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+      iframe.allowFullscreen = true;
+      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+      registerIframeAudioInit(iframe, i, feed);
+      pane.appendChild(iframe);
+    } else {
+      const emptyBox = document.createElement('div');
+      emptyBox.className = 'empty-pane';
+
+      const badge = document.createElement('span');
+      badge.className = 'empty-pane-badge';
+      badge.setAttribute('aria-hidden', 'true');
+      badge.textContent = String(i + 1);
+
+      const label = document.createElement('p');
+      label.className = 'empty-pane-label';
+      label.textContent = `Pane ${i + 1} (${slotPositions[i]}) — No feed URL provided`;
+
+      const configBtn = document.createElement('button');
+      configBtn.type = 'button';
+      configBtn.className = 'empty-pane-btn';
+      configBtn.textContent = 'Add Feed URL';
+      configBtn.addEventListener('click', () => {
+        const latestGrid = grids.find((g) => g.id === grid.id) || grid;
+        openEditGridModal(latestGrid, i);
+      });
+
+      emptyBox.append(badge, label, configBtn);
+      pane.appendChild(emptyBox);
+    }
+
+    return pane;
+  }
+
   function renderPlayerWall(grid) {
     streamWall.innerHTML = '';
     playerGridTitle.textContent = grid.name;
 
-    const feeds = Array.isArray(grid.feeds) ? grid.feeds : ['', '', '', ''];
-    const slotPositions = ['Top-Left', 'Top-Right', 'Bottom-Left', 'Bottom-Right'];
+    const feeds = Array.isArray(grid.feeds) ? grid.feeds : [];
+    for (let i = 0; i < 4; i++) {
+      streamWall.appendChild(createPlayerPaneElement(grid, i, feeds[i]));
+    }
+  }
+
+  function updateActivePlayerWall(grid) {
+    playerGridTitle.textContent = grid.name;
+    document.title = `${grid.name} — GridTube`;
+
+    const feeds = Array.isArray(grid.feeds) ? grid.feeds : [];
+    const existingPanes = streamWall.querySelectorAll('.stream-pane');
+
+    if (existingPanes.length !== 4) {
+      renderPlayerWall(grid);
+      return;
+    }
 
     for (let i = 0; i < 4; i++) {
-      const rawUrl = feeds[i] || '';
-      const embedUrl = buildEmbedUrl(rawUrl);
-      const pane = document.createElement('div');
-      pane.className = 'stream-pane';
+      const feed = normalizeFeedEntry(feeds[i]);
+      const newVideoId = extractYouTubeId(feed.url) || '';
+      const existingPane = existingPanes[i];
+      const existingVideoId = existingPane.dataset.videoId || '';
 
-      if (embedUrl) {
-        const iframe = document.createElement('iframe');
-        iframe.className = 'stream-frame';
-        iframe.src = embedUrl;
-        iframe.title = `${grid.name} — Pane ${i + 1} (${slotPositions[i]}) YouTube Live Feed`;
-        iframe.allow =
-          'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
-        iframe.allowFullscreen = true;
-        iframe.referrerPolicy = 'strict-origin-when-cross-origin';
-        pane.appendChild(iframe);
-      } else {
-        const emptyBox = document.createElement('div');
-        emptyBox.className = 'empty-pane';
-
-        const badge = document.createElement('span');
-        badge.className = 'empty-pane-badge';
-        badge.setAttribute('aria-hidden', 'true');
-        badge.textContent = String(i + 1);
-
-        const label = document.createElement('p');
-        label.className = 'empty-pane-label';
-        label.textContent = `Pane ${i + 1} (${slotPositions[i]}) — No feed URL provided`;
-
-        const configBtn = document.createElement('button');
-        configBtn.type = 'button';
-        configBtn.className = 'empty-pane-btn';
-        configBtn.textContent = 'Add Feed URL';
-        configBtn.addEventListener('click', () => openEditGridModal(grid, i));
-
-        emptyBox.append(badge, label, configBtn);
-        pane.appendChild(emptyBox);
+      if (newVideoId && newVideoId === existingVideoId) {
+        const iframe = existingPane.querySelector('iframe.stream-frame');
+        if (iframe) {
+          iframe.title = `${grid.name} — Pane ${i + 1} (${slotPositions[i]}) YouTube Live Feed`;
+          const state = iframeAudioSyncState.get(iframe);
+          if (state) {
+            state.feed = feed;
+          }
+          sendYouTubeAudioCommands(iframe, feed);
+          setTimeout(() => sendYouTubeAudioCommands(iframe, feed), 150);
+          continue;
+        }
       }
 
-      streamWall.appendChild(pane);
+      const replacementPane = createPlayerPaneElement(grid, i, feed);
+      existingPane.replaceWith(replacementPane);
     }
   }
 
@@ -594,6 +830,9 @@
     gridForm.reset();
     resetFormValidationState(gridForm);
     gridIdInput.value = '';
+    for (let i = 0; i < 4; i++) {
+      setFeedAudioControlState(i, 100, false);
+    }
     gridModalTitle.textContent = 'Add New Stream Grid';
     saveGridBtn.textContent = 'Create Grid';
     formServerError.hidden = true;
@@ -607,9 +846,11 @@
     gridIdInput.value = grid.id;
     gridNameInput.value = grid.name;
 
-    const feeds = Array.isArray(grid.feeds) ? grid.feeds : ['', '', '', ''];
+    const feeds = Array.isArray(grid.feeds) ? grid.feeds : [];
     for (let i = 0; i < 4; i++) {
-      feedInputs[i].value = feeds[i] || '';
+      const feed = normalizeFeedEntry(feeds[i]);
+      feedInputs[i].value = feed.url;
+      setFeedAudioControlState(i, feed.volume, feed.muted);
     }
 
     gridModalTitle.textContent = `Edit "${grid.name}"`;
@@ -638,7 +879,11 @@
     const editingId = gridIdInput.value.trim();
     const payload = {
       name: gridNameInput.value.trim(),
-      feeds: feedInputs.map((input) => input.value.trim())
+      feeds: [0, 1, 2, 3].map((i) => ({
+        url: feedInputs[i].value.trim(),
+        volume: Number(feedVolSliders[i].value),
+        muted: feedMuteBtns[i].getAttribute('aria-pressed') === 'true'
+      }))
     };
 
     saveGridBtn.disabled = true;
@@ -661,7 +906,7 @@
       await closeTopLayer(gridModal);
 
       if (activeGridId === data.id) {
-        renderPlayerWall(data);
+        updateActivePlayerWall(data);
       } else {
         renderLandingList();
         showStatusBanner(

@@ -3,12 +3,28 @@
     "id": "27064743-497b-4482-86bd-228e9e777e56",
     "name": "Virtual Railfan",
     "feeds": [
-      "https://www.youtube.com/watch?v=4XYbh4Pegzw",
-      "https://www.youtube.com/watch?v=9SLt3AT0rXk",
-      "https://www.youtube.com/watch?v=-IqCofAp-yI",
-      "https://www.youtube.com/watch?v=OtssjZ3hdX0"
+      {
+        "url": "https://www.youtube.com/watch?v=4XYbh4Pegzw",
+        "volume": 75,
+        "muted": false
+      },
+      {
+        "url": "https://www.youtube.com/watch?v=9SLt3AT0rXk",
+        "volume": 100,
+        "muted": false
+      },
+      {
+        "url": "https://www.youtube.com/watch?v=-IqCofAp-yI",
+        "volume": 100,
+        "muted": false
+      },
+      {
+        "url": "https://www.youtube.com/watch?v=7xdHH9KMSVk",
+        "volume": 50,
+        "muted": false
+      }
     ],
     "createdAt": "2026-11-12T18:40:16.738Z",
-    "updatedAt": "2026-11-12T18:45:31.783Z"
+    "updatedAt": "2026-11-12T20:06:50.220Z"
   }
 ]

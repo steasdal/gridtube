@@ -140,10 +140,11 @@
         </div>
       </div>
 
-      <fieldset class="feeds-fieldset">
+      <fieldset class="feeds-fieldset" aria-describedby="feeds-group-hint">
         <legend>2×2 Stream Feed URLs</legend>
         <p id="feeds-group-hint" class="fieldset-hint">
           Paste up to four YouTube live stream or video URLs. Leave any slot blank to render an empty box in that pane.
+          <span class="hint">Format: https://www.youtube.com/watch?v=... (or youtu.be / live link)</span>
         </p>
 
         <div class="feeds-inputs-grid">
@@ -151,20 +152,46 @@
             <label for="feed-url-0">
               <span class="pane-badge" aria-hidden="true">1</span> Top-Left Feed URL
             </label>
-            <span id="feed-hint-0" class="hint">Format: https://www.youtube.com/watch?v=... (or leave blank)</span>
-            <input
-              type="text"
-              id="feed-url-0"
-              name="feed0"
-              inputmode="url"
-              autocorrect="off"
-              autocapitalize="none"
-              spellcheck="false"
-              pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
-              aria-describedby="feed-hint-0"
-              data-error="feed-error-0"
-              enterkeyhint="next"
-            >
+            <div class="feed-input-row">
+              <input
+                type="text"
+                id="feed-url-0"
+                name="feed0"
+                inputmode="url"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+                pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
+                data-error="feed-error-0"
+                enterkeyhint="next"
+              >
+              <div class="volume-control">
+                <button type="button" id="feed-mute-0" class="mute-btn" aria-pressed="false" aria-label="Mute Top-Left Feed">
+                  <svg class="icon-unmuted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                  </svg>
+                  <svg class="icon-muted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <line x1="23" y1="9" x2="17" y2="15"></line>
+                    <line x1="17" y1="9" x2="23" y2="15"></line>
+                  </svg>
+                </button>
+                <input
+                  type="range"
+                  id="feed-vol-0"
+                  class="volume-slider"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value="100"
+                  aria-label="Top-Left Feed volume"
+                  aria-valuetext="100%"
+                >
+                <span id="feed-vol-text-0" class="volume-text" aria-hidden="true">100%</span>
+              </div>
+            </div>
             <div id="feed-error-0" class="error-msg">
               <span role="img" aria-label="Error">❌</span> Enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...) or leave blank.
             </div>
@@ -174,20 +201,46 @@
             <label for="feed-url-1">
               <span class="pane-badge" aria-hidden="true">2</span> Top-Right Feed URL
             </label>
-            <span id="feed-hint-1" class="hint">Format: https://www.youtube.com/watch?v=... (or leave blank)</span>
-            <input
-              type="text"
-              id="feed-url-1"
-              name="feed1"
-              inputmode="url"
-              autocorrect="off"
-              autocapitalize="none"
-              spellcheck="false"
-              pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
-              aria-describedby="feed-hint-1"
-              data-error="feed-error-1"
-              enterkeyhint="next"
-            >
+            <div class="feed-input-row">
+              <input
+                type="text"
+                id="feed-url-1"
+                name="feed1"
+                inputmode="url"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+                pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
+                data-error="feed-error-1"
+                enterkeyhint="next"
+              >
+              <div class="volume-control">
+                <button type="button" id="feed-mute-1" class="mute-btn" aria-pressed="false" aria-label="Mute Top-Right Feed">
+                  <svg class="icon-unmuted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                  </svg>
+                  <svg class="icon-muted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <line x1="23" y1="9" x2="17" y2="15"></line>
+                    <line x1="17" y1="9" x2="23" y2="15"></line>
+                  </svg>
+                </button>
+                <input
+                  type="range"
+                  id="feed-vol-1"
+                  class="volume-slider"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value="100"
+                  aria-label="Top-Right Feed volume"
+                  aria-valuetext="100%"
+                >
+                <span id="feed-vol-text-1" class="volume-text" aria-hidden="true">100%</span>
+              </div>
+            </div>
             <div id="feed-error-1" class="error-msg">
               <span role="img" aria-label="Error">❌</span> Enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...) or leave blank.
             </div>
@@ -197,20 +250,46 @@
             <label for="feed-url-2">
               <span class="pane-badge" aria-hidden="true">3</span> Bottom-Left Feed URL
             </label>
-            <span id="feed-hint-2" class="hint">Format: https://www.youtube.com/watch?v=... (or leave blank)</span>
-            <input
-              type="text"
-              id="feed-url-2"
-              name="feed2"
-              inputmode="url"
-              autocorrect="off"
-              autocapitalize="none"
-              spellcheck="false"
-              pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
-              aria-describedby="feed-hint-2"
-              data-error="feed-error-2"
-              enterkeyhint="next"
-            >
+            <div class="feed-input-row">
+              <input
+                type="text"
+                id="feed-url-2"
+                name="feed2"
+                inputmode="url"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+                pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
+                data-error="feed-error-2"
+                enterkeyhint="next"
+              >
+              <div class="volume-control">
+                <button type="button" id="feed-mute-2" class="mute-btn" aria-pressed="false" aria-label="Mute Bottom-Left Feed">
+                  <svg class="icon-unmuted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                  </svg>
+                  <svg class="icon-muted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <line x1="23" y1="9" x2="17" y2="15"></line>
+                    <line x1="17" y1="9" x2="23" y2="15"></line>
+                  </svg>
+                </button>
+                <input
+                  type="range"
+                  id="feed-vol-2"
+                  class="volume-slider"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value="100"
+                  aria-label="Bottom-Left Feed volume"
+                  aria-valuetext="100%"
+                >
+                <span id="feed-vol-text-2" class="volume-text" aria-hidden="true">100%</span>
+              </div>
+            </div>
             <div id="feed-error-2" class="error-msg">
               <span role="img" aria-label="Error">❌</span> Enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...) or leave blank.
             </div>
@@ -220,20 +299,46 @@
             <label for="feed-url-3">
               <span class="pane-badge" aria-hidden="true">4</span> Bottom-Right Feed URL
             </label>
-            <span id="feed-hint-3" class="hint">Format: https://www.youtube.com/watch?v=... (or leave blank)</span>
-            <input
-              type="text"
-              id="feed-url-3"
-              name="feed3"
-              inputmode="url"
-              autocorrect="off"
-              autocapitalize="none"
-              spellcheck="false"
-              pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
-              aria-describedby="feed-hint-3"
-              data-error="feed-error-3"
-              enterkeyhint="done"
-            >
+            <div class="feed-input-row">
+              <input
+                type="text"
+                id="feed-url-3"
+                name="feed3"
+                inputmode="url"
+                autocorrect="off"
+                autocapitalize="none"
+                spellcheck="false"
+                pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
+                data-error="feed-error-3"
+                enterkeyhint="done"
+              >
+              <div class="volume-control">
+                <button type="button" id="feed-mute-3" class="mute-btn" aria-pressed="false" aria-label="Mute Bottom-Right Feed">
+                  <svg class="icon-unmuted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+                  </svg>
+                  <svg class="icon-muted" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <line x1="23" y1="9" x2="17" y2="15"></line>
+                    <line x1="17" y1="9" x2="23" y2="15"></line>
+                  </svg>
+                </button>
+                <input
+                  type="range"
+                  id="feed-vol-3"
+                  class="volume-slider"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value="100"
+                  aria-label="Bottom-Right Feed volume"
+                  aria-valuetext="100%"
+                >
+                <span id="feed-vol-text-3" class="volume-text" aria-hidden="true">100%</span>
+              </div>
+            </div>
             <div id="feed-error-3" class="error-msg">
               <span role="img" aria-label="Error">❌</span> Enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...) or leave blank.
             </div>
