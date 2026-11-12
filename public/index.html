@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="light dark">
+  <title>GridTube — 2×2 YouTube Live Stream Wall</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main id="app-root">
+    <!-- VIEW 1: LANDING PAGE -->
+    <section id="landing-view" class="landing-view" aria-labelledby="landing-heading">
+      <header class="site-header">
+        <div class="brand-group">
+          <div class="brand-logo" aria-hidden="true">
+            <span class="logo-pane logo-pane-1"></span>
+            <span class="logo-pane logo-pane-2"></span>
+            <span class="logo-pane logo-pane-3"></span>
+            <span class="logo-pane logo-pane-4"></span>
+          </div>
+          <div>
+            <h1 id="landing-heading" class="site-title" tabindex="-1">GridTube</h1>
+            <p class="site-subtitle">Full-bleed 2×2 YouTube live stream walls</p>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <button type="button" id="new-grid-btn" class="btn btn-primary">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>New Grid</span>
+          </button>
+        </div>
+      </header>
+
+      <div id="status-banner" class="status-banner" role="status" aria-live="polite" hidden></div>
+
+      <section aria-label="Saved stream grids" class="grids-section">
+        <ul id="grids-list" class="grids-list"></ul>
+
+        <div id="empty-state" class="empty-state" hidden>
+          <div class="empty-state-icon" aria-hidden="true">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" rx="1"></rect>
+              <rect x="14" y="3" width="7" height="7" rx="1"></rect>
+              <rect x="14" y="14" width="7" height="7" rx="1"></rect>
+              <rect x="3" y="14" width="7" height="7" rx="1"></rect>
+            </svg>
+          </div>
+          <h2>No stream grids yet</h2>
+          <p>Create a named 2×2 grid with up to four YouTube live stream URLs to start watching.</p>
+          <button type="button" id="empty-new-grid-btn" class="btn btn-primary">
+            Create Your First Grid
+          </button>
+        </div>
+      </section>
+    </section>
+
+    <!-- VIEW 2: FULL-VIEWPORT 2x2 STREAM GRID -->
+    <section id="player-view" class="player-view" aria-labelledby="player-grid-title" tabindex="-1" hidden>
+      <!-- Top-edge hover/focus drawer HUD: stays tucked off-screen until hovered so video controls are never blocked -->
+      <header id="player-hud" class="player-hud">
+        <div class="player-hud-bar">
+          <button type="button" id="back-to-grids-btn" class="hud-btn" aria-label="Back to saved grids">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="19" y1="12" x2="5" y2="12"></line>
+              <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+            <span>Grids</span>
+          </button>
+
+          <h2 id="player-grid-title" class="hud-title"></h2>
+
+          <div class="hud-actions">
+            <button type="button" id="edit-active-grid-btn" class="hud-btn" aria-label="Edit feeds in this grid">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12 20h9"></path>
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+              </svg>
+              <span>Edit</span>
+            </button>
+            <button type="button" id="fullscreen-btn" class="hud-btn" aria-label="Toggle fullscreen">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="15 3 21 3 21 9"></polyline>
+                <polyline points="9 21 3 21 3 15"></polyline>
+                <line x1="21" y1="3" x2="14" y2="10"></line>
+                <line x1="3" y1="21" x2="10" y2="14"></line>
+              </svg>
+              <span id="fullscreen-label">Fullscreen</span>
+            </button>
+          </div>
+        </div>
+        <div class="player-hud-tab" aria-hidden="true">
+          <span>Menu</span>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </div>
+      </header>
+
+      <div id="stream-wall" class="stream-wall"></div>
+    </section>
+  </main>
+
+  <!-- MODAL 1: ADD / EDIT NAMED GRID -->
+  <dialog id="grid-modal" class="modal-dialog" closedby="any" aria-labelledby="grid-modal-title">
+    <div class="modal-header">
+      <h2 id="grid-modal-title" class="modal-title">Add New Stream Grid</h2>
+      <button type="button" id="close-grid-modal-btn" class="icon-btn" aria-label="Close modal">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <form id="grid-form" class="modal-form" method="post" action="/api/grids" novalidate>
+      <input type="hidden" id="grid-id-input" name="id" value="">
+
+      <div class="field">
+        <label for="grid-name-input">Grid Name <span aria-hidden="true">*</span></label>
+        <span id="grid-name-hint" class="hint">Give your 2×2 grid a memorable name (e.g., choo-choos).</span>
+        <input
+          type="text"
+          id="grid-name-input"
+          name="name"
+          required
+          maxlength="80"
+          autofocus
+          aria-describedby="grid-name-hint"
+          data-error="grid-name-error"
+          enterkeyhint="next"
+        >
+        <div id="grid-name-error" class="error-msg">
+          <span role="img" aria-label="Error">❌</span> Please enter a name for this grid (1–80 characters).
+        </div>
+      </div>
+
+      <fieldset class="feeds-fieldset">
+        <legend>2×2 Stream Feed URLs</legend>
+        <p id="feeds-group-hint" class="fieldset-hint">
+          Paste up to four YouTube live stream or video URLs. Leave any slot blank to render an empty box in that pane.
+        </p>
+
+        <div class="feeds-inputs-grid">
+          <div class="field">
+            <label for="feed-url-0">
+              <span class="pane-badge" aria-hidden="true">1</span> Top-Left Feed URL
+            </label>
+            <span id="feed-hint-0" class="hint">Format: https://www.youtube.com/watch?v=... (or leave blank)</span>
+            <input
+              type="text"
+              id="feed-url-0"
+              name="feed0"
+              inputmode="url"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+              pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
+              aria-describedby="feed-hint-0"
+              data-error="feed-error-0"
+              enterkeyhint="next"
+            >
+            <div id="feed-error-0" class="error-msg">
+              <span role="img" aria-label="Error">❌</span> Enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...) or leave blank.
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="feed-url-1">
+              <span class="pane-badge" aria-hidden="true">2</span> Top-Right Feed URL
+            </label>
+            <span id="feed-hint-1" class="hint">Format: https://www.youtube.com/watch?v=... (or leave blank)</span>
+            <input
+              type="text"
+              id="feed-url-1"
+              name="feed1"
+              inputmode="url"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+              pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
+              aria-describedby="feed-hint-1"
+              data-error="feed-error-1"
+              enterkeyhint="next"
+            >
+            <div id="feed-error-1" class="error-msg">
+              <span role="img" aria-label="Error">❌</span> Enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...) or leave blank.
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="feed-url-2">
+              <span class="pane-badge" aria-hidden="true">3</span> Bottom-Left Feed URL
+            </label>
+            <span id="feed-hint-2" class="hint">Format: https://www.youtube.com/watch?v=... (or leave blank)</span>
+            <input
+              type="text"
+              id="feed-url-2"
+              name="feed2"
+              inputmode="url"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+              pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
+              aria-describedby="feed-hint-2"
+              data-error="feed-error-2"
+              enterkeyhint="next"
+            >
+            <div id="feed-error-2" class="error-msg">
+              <span role="img" aria-label="Error">❌</span> Enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...) or leave blank.
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="feed-url-3">
+              <span class="pane-badge" aria-hidden="true">4</span> Bottom-Right Feed URL
+            </label>
+            <span id="feed-hint-3" class="hint">Format: https://www.youtube.com/watch?v=... (or leave blank)</span>
+            <input
+              type="text"
+              id="feed-url-3"
+              name="feed3"
+              inputmode="url"
+              autocorrect="off"
+              autocapitalize="none"
+              spellcheck="false"
+              pattern="^(https?://(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)/.+|[A-Za-z0-9_\-]{11})$"
+              aria-describedby="feed-hint-3"
+              data-error="feed-error-3"
+              enterkeyhint="done"
+            >
+            <div id="feed-error-3" class="error-msg">
+              <span role="img" aria-label="Error">❌</span> Enter a valid YouTube URL (e.g., https://www.youtube.com/watch?v=...) or leave blank.
+            </div>
+          </div>
+        </div>
+      </fieldset>
+
+      <div id="form-server-error" class="form-server-error" role="alert" hidden></div>
+
+      <div class="modal-actions">
+        <button type="button" id="cancel-grid-modal-btn" class="btn btn-secondary">Cancel</button>
+        <button type="submit" id="save-grid-btn" class="btn btn-primary">Save Grid</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- MODAL 2: DELETE CONFIRMATION DIALOG -->
+  <dialog id="delete-modal" class="modal-dialog modal-dialog-compact" closedby="any" aria-labelledby="delete-modal-title">
+    <div class="modal-header">
+      <h2 id="delete-modal-title" class="modal-title">Delete Named Grid?</h2>
+      <button type="button" id="close-delete-modal-btn" class="icon-btn" aria-label="Close confirmation modal">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <div class="modal-body">
+      <p class="delete-confirm-text">
+        Are you sure you want to delete <strong id="delete-grid-name"></strong>? This action cannot be undone.
+      </p>
+    </div>
+
+    <div class="modal-actions">
+      <button type="button" id="cancel-delete-btn" class="btn btn-secondary" autofocus>Cancel</button>
+      <button type="button" id="confirm-delete-btn" class="btn btn-danger">Delete Grid</button>
+    </div>
+  </dialog>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
