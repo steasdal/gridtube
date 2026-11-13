@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
   <title>GridTube — 2×2 YouTube Live Stream Wall</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
@@ -73,9 +73,9 @@
 
     <!-- VIEW 2: FULL-VIEWPORT 2x2 STREAM GRID -->
     <section id="player-view" class="player-view" aria-labelledby="player-grid-title" tabindex="-1" hidden>
-      <!-- Top-edge hover/focus drawer HUD: stays tucked off-screen until hovered so video controls are never blocked -->
-      <header id="player-hud" class="player-hud">
-        <div class="player-hud-bar">
+      <!-- Top-edge hover/focus/tap drawer HUD: stays tucked off-screen until opened so video controls are never blocked -->
+      <header id="player-hud" class="player-hud" data-open="false">
+        <div id="player-hud-bar" class="player-hud-bar">
           <button type="button" id="back-to-grids-btn" class="hud-btn" aria-label="Back to saved grids">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <line x1="19" y1="12" x2="5" y2="12"></line>
@@ -103,14 +103,26 @@
               </svg>
               <span id="fullscreen-label">Fullscreen</span>
             </button>
+            <button type="button" id="close-hud-btn" class="hud-btn hud-close-btn" aria-label="Hide menu">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="18 15 12 9 6 15"></polyline>
+              </svg>
+            </button>
           </div>
         </div>
-        <div class="player-hud-tab" aria-hidden="true">
+        <button
+          type="button"
+          id="player-hud-toggle"
+          class="player-hud-tab"
+          aria-expanded="false"
+          aria-controls="player-hud-bar"
+          aria-label="Open stream menu"
+        >
           <span>Menu</span>
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
-        </div>
+        </button>
       </header>
 
       <div id="stream-wall" class="stream-wall"></div>

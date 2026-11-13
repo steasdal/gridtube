@@ -408,6 +408,9 @@
 
   const newGridBtn = document.getElementById('new-grid-btn');
   const emptyNewGridBtn = document.getElementById('empty-new-grid-btn');
+  const playerHud = document.getElementById('player-hud');
+  const playerHudToggle = document.getElementById('player-hud-toggle');
+  const closeHudBtn = document.getElementById('close-hud-btn');
   const backToGridsBtn = document.getElementById('back-to-grids-btn');
   const editActiveGridBtn = document.getElementById('edit-active-grid-btn');
   const fullscreenBtn = document.getElementById('fullscreen-btn');
@@ -802,7 +805,22 @@
     }
   }
 
+  function setPlayerHudOpen(open, returnFocusToToggle = false) {
+    const isOpen = Boolean(open);
+    playerHud.dataset.open = isOpen ? 'true' : 'false';
+    playerHudToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    if (!isOpen) {
+      if (playerHud.contains(document.activeElement)) {
+        document.activeElement.blur();
+      }
+      if (returnFocusToToggle) {
+        playerHudToggle.focus();
+      }
+    }
+  }
+
   function handleRouteChange() {
+    setPlayerHudOpen(false);
     const hash = window.location.hash || '#/';
     if (hash.startsWith('#/grid/')) {
       const id = decodeURIComponent(hash.slice('#/grid/'.length));
@@ -980,7 +998,31 @@
   cancelDeleteBtn.addEventListener('click', () => closeTopLayer(deleteModal));
 
   // Wire up Player HUD buttons
+  playerHudToggle.addEventListener('click', (e) => {
+    setPlayerHudOpen(true);
+    if (e.detail === 0) {
+      backToGridsBtn.focus();
+    }
+  });
+
+  closeHudBtn.addEventListener('click', (e) => {
+    setPlayerHudOpen(false, e.detail === 0);
+  });
+
+  document.addEventListener('pointerdown', (e) => {
+    if (playerHud.dataset.open === 'true' && !playerHud.contains(e.target)) {
+      setPlayerHudOpen(false);
+    }
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && playerHud.dataset.open === 'true' && !gridModal.open && !deleteModal.open) {
+      setPlayerHudOpen(false, true);
+    }
+  });
+
   backToGridsBtn.addEventListener('click', () => {
+    setPlayerHudOpen(false);
     if (document.fullscreenElement) {
       document.exitFullscreen().catch(() => {});
     }
@@ -988,6 +1030,7 @@
   });
 
   editActiveGridBtn.addEventListener('click', () => {
+    setPlayerHudOpen(false);
     const grid = grids.find((g) => g.id === activeGridId);
     if (grid) openEditGridModal(grid);
   });
