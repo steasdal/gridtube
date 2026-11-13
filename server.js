@@ -8,6 +8,19 @@ const PORT = parseInt(process.env.PORT || '8080', 10);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const GRIDS_FILE = path.join(DATA_DIR, 'grids.json');
 const PUBLIC_DIR = path.join(__dirname, 'public');
+const VERSION_FILE = path.join(__dirname, 'version.yml');
+
+function loadAppVersion() {
+  try {
+    const raw = fsSync.readFileSync(VERSION_FILE, 'utf8');
+    const match = raw.match(/^\s*version\s*:\s*["']?([^\r\n"']+?)["']?\s*$/m);
+    return match && match[1] ? match[1].trim() : 'local';
+  } catch {
+    return 'local';
+  }
+}
+
+const APP_VERSION = loadAppVersion();
 
 const DEFAULT_GRIDS = [
   {
@@ -197,7 +210,11 @@ const server = http.createServer(async (req, res) => {
     const pathname = parsedUrl.pathname;
 
     if (pathname === '/api/health' && req.method === 'GET') {
-      return sendJson(res, 200, { status: 'ok', storage: GRIDS_FILE });
+      return sendJson(res, 200, { status: 'ok', version: APP_VERSION, storage: GRIDS_FILE });
+    }
+
+    if (pathname === '/api/version' && req.method === 'GET') {
+      return sendJson(res, 200, { version: APP_VERSION });
     }
 
     if (pathname === '/api/grids' && req.method === 'GET') {

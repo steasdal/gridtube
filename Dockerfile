@@ -9,7 +9,7 @@ ENV NODE_ENV=production \
 # Create persistent volume mount point owned by the non-root node user (UID 1000)
 RUN mkdir -p /data && chown -R node:node /data /app
 
-COPY --chown=node:node package.json server.js ./
+COPY --chown=node:node package.json server.js version.yml ./
 COPY --chown=node:node public ./public
 
 VOLUME ["/data"]

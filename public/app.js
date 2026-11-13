@@ -404,6 +404,7 @@
   const gridsList = document.getElementById('grids-list');
   const emptyState = document.getElementById('empty-state');
   const statusBanner = document.getElementById('status-banner');
+  const appVersionEl = document.getElementById('app-version');
 
   const newGridBtn = document.getElementById('new-grid-btn');
   const emptyNewGridBtn = document.getElementById('empty-new-grid-btn');
@@ -523,6 +524,20 @@
     const res = await fetch('/api/grids', { headers: { Accept: 'application/json' } });
     if (!res.ok) throw new Error('Failed to load saved grids.');
     grids = await res.json();
+  }
+
+  async function fetchVersion() {
+    try {
+      const res = await fetch('/api/version', { headers: { Accept: 'application/json' } });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.version && appVersionEl) {
+        appVersionEl.textContent = `Version ${data.version}`;
+        appVersionEl.hidden = false;
+      }
+    } catch {
+      // Ignore version fetch errors silently
+    }
   }
 
   function showStatusBanner(message) {
@@ -994,6 +1009,7 @@
   // ==========================================
 
   (async function init() {
+    fetchVersion();
     try {
       await fetchGrids();
     } catch (err) {
