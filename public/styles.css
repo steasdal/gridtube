@@ -566,6 +566,59 @@ h2:focus,
   border: 0;
 }
 
+.pane-audio-btn {
+  position: absolute;
+  inset-block-end: max(0.5rem, env(safe-area-inset-bottom, 0px));
+  inset-inline-start: max(0.5rem, env(safe-area-inset-left, 0px));
+  z-index: 15;
+  display: inline-flex;
+  align-items: safe center;
+  justify-content: center;
+  inline-size: 36px;
+  block-size: 36px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgb(255 255 255 / 0.22);
+  background: rgb(9 13 22 / 0.78);
+  color: #e2e8f0;
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+  opacity: 0.85;
+  transition: opacity 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+/* Extend invisible tap area to 44x44px without inflating visual button over video */
+.pane-audio-btn::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+
+.pane-audio-btn:focus-visible {
+  opacity: 1;
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.pane-audio-btn .icon-unmuted {
+  display: none;
+}
+
+.pane-audio-btn[aria-pressed="true"] {
+  opacity: 1;
+  background: rgb(37 99 235 / 0.92);
+  border-color: #93c5fd;
+  color: #ffffff;
+}
+
+.pane-audio-btn[aria-pressed="true"] .icon-muted {
+  display: none;
+}
+
+.pane-audio-btn[aria-pressed="true"] .icon-unmuted {
+  display: block;
+}
+
 .empty-pane {
   display: flex;
   flex-direction: column;
