@@ -1140,9 +1140,35 @@
     }
   });
 
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  }
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && playerHud.dataset.open === 'true' && !gridModal.open && !deleteModal.open) {
       setPlayerHudOpen(false, true);
+      return;
+    }
+
+    if (
+      (e.key === 'f' || e.key === 'F') &&
+      !e.repeat &&
+      !e.metaKey &&
+      !e.ctrlKey &&
+      !e.altKey &&
+      !playerView.hidden &&
+      activeGridId &&
+      !gridModal.open &&
+      !deleteModal.open &&
+      !e.target?.closest?.('input, textarea, select, [contenteditable]') &&
+      !e.target?.isContentEditable
+    ) {
+      e.preventDefault();
+      toggleFullscreen();
     }
   });
 
@@ -1160,13 +1186,7 @@
     if (grid) openEditGridModal(grid);
   });
 
-  fullscreenBtn.addEventListener('click', () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-    } else {
-      document.exitFullscreen().catch(() => {});
-    }
-  });
+  fullscreenBtn.addEventListener('click', toggleFullscreen);
 
   document.addEventListener('fullscreenchange', () => {
     fullscreenLabel.textContent = document.fullscreenElement ? 'Exit Fullscreen' : 'Fullscreen';
