@@ -449,6 +449,25 @@ h2:focus,
   margin-block-end: 1.5rem;
 }
 
+.landing-version {
+  position: fixed;
+  inset-block-end: 0.75rem;
+  inset-inline-end: 1rem;
+  z-index: 10;
+  padding: 0.25rem 0.6rem;
+  border-radius: 6px;
+  background-color: var(--surface-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  pointer-events: none;
+  user-select: none;
+  opacity: 0.85;
+}
+
 /* ========================
    PLAYER VIEW (100% SCREEN REAL ESTATE FOR VIDEOS)
    ======================== */

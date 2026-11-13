@@ -64,6 +64,12 @@ jobs:
             type=ref,event=pr
             type=sha,prefix=develop-
 
+      - name: Stamp 7-character Git SHA into version.yml
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          echo "version: ${SHORT_SHA}" > version.yml
+          cat version.yml
+
       - name: Build and push multi-arch Docker image
         id: build
         uses: docker/build-push-action@v6
