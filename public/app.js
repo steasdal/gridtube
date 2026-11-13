@@ -276,11 +276,17 @@
     return { url: '', volume: 100, muted: false };
   }
 
+  // iOS/iPadOS WebKit (used by both Safari and Chrome on iOS) blocks unmuted autoplay and pauses
+  // iframes on programmatic unMute without a direct user gesture inside each frame.
+  const IS_IOS =
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
   function buildEmbedUrl(feedEntry) {
     const feed = normalizeFeedEntry(feedEntry);
     const videoId = extractYouTubeId(feed.url);
     if (!videoId) return null;
-    const isMuted = feed.muted || feed.volume === 0;
+    const isMuted = IS_IOS || feed.muted || feed.volume === 0;
     const params = new URLSearchParams({
       autoplay: '1',
       mute: isMuted ? '1' : '0',
@@ -314,7 +320,7 @@
   function sendYouTubeAudioCommands(iframe, feedEntry) {
     if (!iframe?.contentWindow) return;
     const feed = normalizeFeedEntry(feedEntry);
-    const shouldMute = feed.muted || feed.volume === 0;
+    const shouldMute = IS_IOS || feed.muted || feed.volume === 0;
     if (shouldMute) {
       postYouTubeCommand(iframe, 'setVolume', [feed.volume]);
       postYouTubeCommand(iframe, 'mute', []);
