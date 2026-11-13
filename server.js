@@ -316,8 +316,24 @@ const server = http.createServer(async (req, res) => {
 
     const ext = path.extname(candidatePath).toLowerCase();
     const contentType = MIME_TYPES[ext] || 'application/octet-stream';
-    const content = await fs.readFile(candidatePath);
-    res.writeHead(200, { 'Content-Type': contentType });
+    let content = await fs.readFile(candidatePath);
+    const headers = {
+      'Content-Type': contentType,
+      'Cache-Control': 'no-cache, must-revalidate'
+    };
+
+    if (path.basename(candidatePath) === 'index.html') {
+      const v = encodeURIComponent(APP_VERSION);
+      const html = content
+        .toString('utf8')
+        .replace(/href="\/(styles\.css|favicon\.svg)"/g, `href="/$1?v=${v}"`)
+        .replace(/src="\/(app\.js)"/g, `src="/$1?v=${v}"`);
+      content = Buffer.from(html, 'utf8');
+    } else if (APP_VERSION !== 'local' && parsedUrl.searchParams.get('v') === APP_VERSION) {
+      headers['Cache-Control'] = 'public, max-age=31536000, immutable';
+    }
+
+    res.writeHead(200, headers);
     res.end(content);
   } catch (err) {
     console.error('Unhandled request error:', err);
