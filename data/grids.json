@@ -1,7 +1,7 @@
 [
   {
     "id": "27064743-497b-4482-86bd-228e9e777e56",
-    "name": "Virtual Railfan",
+    "name": "Virtual Railfan - Street Runners",
     "feeds": [
       {
         "url": "https://www.youtube.com/watch?v=4XYbh4Pegzw",
@@ -20,11 +20,11 @@
       },
       {
         "url": "https://www.youtube.com/watch?v=7xdHH9KMSVk",
-        "volume": 50,
+        "volume": 35,
         "muted": false
       }
     ],
     "createdAt": "2026-11-12T18:40:16.738Z",
-    "updatedAt": "2026-11-12T20:06:50.220Z"
+    "updatedAt": "2026-11-12T21:56:27.633Z"
   }
 ]
