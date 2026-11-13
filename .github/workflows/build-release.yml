@@ -81,3 +81,35 @@ jobs:
             done <<< "$TAGS"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout GitOps repository
+        uses: actions/checkout@v4
+        with:
+          repository: steasdal/gitops
+          ref: main
+          ssh-key: ${{ secrets.GITOPS_DEPLOY_KEY }}
+          path: gitops
+
+      - name: Update production image tag in GitOps repository
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          RELEASE_IMAGE=$(grep -v ':latest$' <<< "$TAGS" | grep -v '^$' | head -n 1)
+          if [ -z "$RELEASE_IMAGE" ]; then
+            echo "Error: Could not find release version tag in metadata output"
+            exit 1
+          fi
+          echo "Updating apps/gridtube/prod/02-app.yaml to image: ${RELEASE_IMAGE}"
+          cd gitops
+          sed -i -E "s|(image:[[:space:]]*)ghcr\.io/steasdal/gridtube:[^[:space:]]+|\1${RELEASE_IMAGE}|" apps/gridtube/prod/02-app.yaml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet apps/gridtube/prod/02-app.yaml; then
+            echo "No changes to commit in apps/gridtube/prod/02-app.yaml"
+          else
+            git add apps/gridtube/prod/02-app.yaml
+            git commit -m "chore(gridtube): update production image to ${RELEASE_IMAGE#*:}"
+            git pull --rebase origin main
+            git push origin main
+            echo "Updated \`steasdal/gitops\` (\`apps/gridtube/prod/02-app.yaml\`) to \`${RELEASE_IMAGE}\`" >> "$GITHUB_STEP_SUMMARY"
+          fi
