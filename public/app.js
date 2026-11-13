@@ -523,17 +523,53 @@
   // 4. API CLIENT
   // ==========================================
 
+  async function requestJson(url, options = {}, fallbackMessage = 'Request failed.') {
+    const res = await fetch(url, {
+      ...options,
+      headers: {
+        Accept: 'application/json',
+        ...options.headers
+      }
+    });
+
+    const contentType = res.headers.get('content-type') || '';
+    const isJson = contentType.includes('application/json');
+    let data = null;
+
+    if (isJson) {
+      try {
+        data = await res.json();
+      } catch {
+        data = null;
+      }
+    }
+
+    if (!res.ok) {
+      if (data?.error) {
+        throw new Error(data.error);
+      }
+      if (res.status === 403 && !isJson) {
+        throw new Error(
+          'Request was blocked upstream (HTTP 403). If your security session expired or you switched device emulation, reload the page and try again.'
+        );
+      }
+      throw new Error(`${fallbackMessage} (HTTP ${res.status})`);
+    }
+
+    if (!isJson || data === null) {
+      throw new Error('Unexpected response from server. Try reloading the page.');
+    }
+
+    return data;
+  }
+
   async function fetchGrids() {
-    const res = await fetch('/api/grids', { headers: { Accept: 'application/json' } });
-    if (!res.ok) throw new Error('Failed to load saved grids.');
-    grids = await res.json();
+    grids = await requestJson('/api/grids', {}, 'Failed to load saved grids.');
   }
 
   async function fetchVersion() {
     try {
-      const res = await fetch('/api/version', { headers: { Accept: 'application/json' } });
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await requestJson('/api/version', {}, 'Failed to load version.');
       if (data?.version && appVersionEl) {
         appVersionEl.textContent = `Version ${data.version}`;
         appVersionEl.hidden = false;
@@ -924,16 +960,15 @@
       const url = editingId ? `/api/grids/${encodeURIComponent(editingId)}` : '/api/grids';
       const method = editingId ? 'PUT' : 'POST';
 
-      const res = await fetch(url, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Could not save grid.');
-      }
+      const data = await requestJson(
+        url,
+        {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        },
+        'Could not save grid.'
+      );
 
       await fetchGrids();
       await closeTopLayer(gridModal);
@@ -968,12 +1003,11 @@
 
     confirmDeleteBtn.disabled = true;
     try {
-      const res = await fetch(`/api/grids/${encodeURIComponent(idToDelete)}`, {
-        method: 'DELETE'
-      });
-      if (!res.ok) {
-        throw new Error('Failed to delete grid.');
-      }
+      await requestJson(
+        `/api/grids/${encodeURIComponent(idToDelete)}`,
+        { method: 'DELETE' },
+        'Failed to delete grid.'
+      );
       pendingDeleteGridId = null;
       await fetchGrids();
       await closeTopLayer(deleteModal);
