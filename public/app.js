@@ -317,24 +317,68 @@
     );
   }
 
+  const IS_TOUCH_MOBILE =
+    IS_IOS || Boolean(window.matchMedia?.('(pointer: coarse)')?.matches);
+
+  function setPaneAudioButtonState(btn, isUnmuted) {
+    if (!btn) return;
+    btn.setAttribute('aria-pressed', isUnmuted ? 'true' : 'false');
+  }
+
   function sendYouTubeAudioCommands(iframe, feedEntry) {
     if (!iframe?.contentWindow) return;
     const feed = normalizeFeedEntry(feedEntry);
-    const shouldMute = IS_IOS || feed.muted || feed.volume === 0;
+    const state = iframeAudioSyncState.get(iframe);
+    const shouldMute = IS_IOS
+      ? !state?.userUnmuted
+      : (feed.muted || feed.volume === 0);
     if (shouldMute) {
       postYouTubeCommand(iframe, 'setVolume', [feed.volume]);
       postYouTubeCommand(iframe, 'mute', []);
     } else {
       postYouTubeCommand(iframe, 'unMute', []);
-      postYouTubeCommand(iframe, 'setVolume', [feed.volume]);
+      postYouTubeCommand(iframe, 'setVolume', [feed.volume > 0 ? feed.volume : 100]);
     }
   }
 
-  function registerIframeAudioInit(iframe, paneIndex, feedEntry) {
+  function togglePaneAudio(iframe) {
+    const state = iframeAudioSyncState.get(iframe);
+    if (!state) return;
+
+    const nextUnmuted = !state.userUnmuted;
+    if (nextUnmuted) {
+      // On iOS/mobile, mute other panes cleanly so only one audio stream plays at a time
+      for (const otherFrame of streamWall.querySelectorAll('iframe.stream-frame')) {
+        if (otherFrame === iframe) continue;
+        const otherState = iframeAudioSyncState.get(otherFrame);
+        if (otherState?.userUnmuted) {
+          otherState.userUnmuted = false;
+          setPaneAudioButtonState(otherState.audioBtn, false);
+          postYouTubeCommand(otherFrame, 'mute', []);
+        }
+      }
+
+      state.userUnmuted = true;
+      state.syncedOnPlay = true;
+      setPaneAudioButtonState(state.audioBtn, true);
+      const targetVolume = state.feed.volume > 0 ? state.feed.volume : 100;
+      postYouTubeCommand(iframe, 'unMute', []);
+      postYouTubeCommand(iframe, 'setVolume', [targetVolume]);
+      postYouTubeCommand(iframe, 'playVideo', []);
+    } else {
+      state.userUnmuted = false;
+      setPaneAudioButtonState(state.audioBtn, false);
+      postYouTubeCommand(iframe, 'mute', []);
+    }
+  }
+
+  function registerIframeAudioInit(iframe, paneIndex, feedEntry, audioBtn = null) {
     const feed = normalizeFeedEntry(feedEntry);
     iframeAudioSyncState.set(iframe, {
       paneIndex,
       feed,
+      audioBtn,
+      userUnmuted: !(IS_IOS || feed.muted || feed.volume === 0),
       syncedOnPlay: false
     });
 
@@ -374,7 +418,17 @@
     for (const iframe of iframes) {
       if (iframe.contentWindow !== event.source) continue;
       const state = iframeAudioSyncState.get(iframe);
-      if (!state || state.syncedOnPlay) break;
+      if (!state) break;
+
+      if (data.event === 'infoDelivery' && data.info && typeof data.info.muted === 'boolean') {
+        const isUnmuted = !data.info.muted;
+        if (state.syncedOnPlay || isUnmuted) {
+          state.userUnmuted = isUnmuted;
+          setPaneAudioButtonState(state.audioBtn, isUnmuted);
+        }
+      }
+
+      if (state.syncedOnPlay) break;
 
       if (data.event === 'onReady') {
         sendYouTubeAudioCommands(iframe, state.feed);
@@ -748,8 +802,35 @@
         'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
       iframe.allowFullscreen = true;
       iframe.referrerPolicy = 'strict-origin-when-cross-origin';
-      registerIframeAudioInit(iframe, i, feed);
+
+      let audioBtn = null;
+      if (IS_TOUCH_MOBILE) {
+        const startsMuted = IS_IOS || feed.muted || feed.volume === 0;
+        audioBtn = document.createElement('button');
+        audioBtn.type = 'button';
+        audioBtn.className = 'pane-audio-btn';
+        audioBtn.setAttribute('aria-pressed', startsMuted ? 'false' : 'true');
+        audioBtn.setAttribute('aria-label', `Pane ${i + 1} (${slotPositions[i]}) sound`);
+        audioBtn.innerHTML = `
+          <svg class="icon-unmuted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+          </svg>
+          <svg class="icon-muted" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+            <line x1="23" y1="9" x2="17" y2="15"></line>
+            <line x1="17" y1="9" x2="23" y2="15"></line>
+          </svg>
+        `;
+        audioBtn.addEventListener('click', () => togglePaneAudio(iframe));
+      }
+
+      registerIframeAudioInit(iframe, i, feed, audioBtn);
       pane.appendChild(iframe);
+      if (audioBtn) {
+        pane.appendChild(audioBtn);
+      }
     } else {
       const emptyBox = document.createElement('div');
       emptyBox.className = 'empty-pane';
@@ -814,6 +895,10 @@
           const state = iframeAudioSyncState.get(iframe);
           if (state) {
             state.feed = feed;
+            if (feed.muted || feed.volume === 0) {
+              state.userUnmuted = false;
+              setPaneAudioButtonState(state.audioBtn, false);
+            }
           }
           sendYouTubeAudioCommands(iframe, feed);
           setTimeout(() => sendYouTubeAudioCommands(iframe, feed), 150);
