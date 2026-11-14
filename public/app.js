@@ -946,6 +946,82 @@
     }
   }
 
+  let playerViewportTimers = [];
+
+  function clearPlayerViewportSyncTimers() {
+    for (const timerId of playerViewportTimers) {
+      clearTimeout(timerId);
+    }
+    playerViewportTimers = [];
+  }
+
+  function clearPlayerViewportOverrides() {
+    playerView.style.removeProperty('--player-inline-size');
+    playerView.style.removeProperty('--player-block-size');
+  }
+
+  function syncPlayerViewport() {
+    if (playerView.hidden || document.fullscreenElement) {
+      clearPlayerViewportOverrides();
+      return;
+    }
+
+    // Avoid resizing the video wall while the iOS virtual keyboard shrinks visualViewport inside a modal
+    if (gridModal.open || deleteModal.open) {
+      return;
+    }
+
+    const vv = window.visualViewport;
+    const scale = vv && Number.isFinite(vv.scale) && vv.scale > 0 ? vv.scale : 1;
+    const vpWidth = vv && vv.width > 0 ? Math.round(vv.width * scale) : Math.round(window.innerWidth);
+    const vpHeight = vv && vv.height > 0 ? Math.round(vv.height * scale) : Math.round(window.innerHeight);
+
+    if (vpWidth <= 0 || vpHeight <= 0) return;
+
+    if (!IS_IOS) {
+      clearPlayerViewportOverrides();
+      const rect = playerView.getBoundingClientRect();
+      if (Math.abs(rect.width - vpWidth) <= 2 && Math.abs(rect.height - vpHeight) <= 2) {
+        return;
+      }
+    }
+
+    const nextWidth = `${vpWidth}px`;
+    const nextHeight = `${vpHeight}px`;
+    const prevWidth = playerView.style.getPropertyValue('--player-inline-size');
+    const prevHeight = playerView.style.getPropertyValue('--player-block-size');
+
+    playerView.style.setProperty('--player-inline-size', nextWidth);
+    playerView.style.setProperty('--player-block-size', nextHeight);
+
+    if (window.scrollX !== 0 || window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+
+    if (prevWidth !== nextWidth || prevHeight !== nextHeight) {
+      // Force WebKit to recalculate grid tracks and iframe bounds without toggling display
+      void streamWall.offsetHeight;
+    }
+  }
+
+  function schedulePlayerViewportSync({ withRotationRetries = false } = {}) {
+    clearPlayerViewportSyncTimers();
+    if (playerView.hidden) {
+      clearPlayerViewportOverrides();
+      return;
+    }
+
+    requestAnimationFrame(() => syncPlayerViewport());
+
+    if (withRotationRetries || IS_IOS) {
+      // iOS/iPadOS WKWebView updates visualViewport/innerWidth asynchronously after rotation completes
+      const delays = withRotationRetries ? [50, 180, 380, 650] : [60, 220];
+      for (const delay of delays) {
+        playerViewportTimers.push(setTimeout(() => syncPlayerViewport(), delay));
+      }
+    }
+  }
+
   function handleRouteChange() {
     setPlayerHudOpen(false);
     const hash = window.location.hash || '#/';
@@ -965,7 +1041,9 @@
         landingView.hidden = true;
         playerView.hidden = false;
         renderPlayerWall(grid);
+        syncPlayerViewport();
       }, playerView);
+      schedulePlayerViewportSync({ withRotationRetries: true });
     } else {
       activeGridId = null;
       document.title = 'GridTube — 2×2 YouTube Live Stream Wall';
@@ -974,6 +1052,8 @@
         // Stop active video streams when returning to landing page
         streamWall.innerHTML = '';
         playerView.hidden = true;
+        clearPlayerViewportSyncTimers();
+        clearPlayerViewportOverrides();
         landingView.hidden = false;
         renderLandingList();
       }, landingHeading);
@@ -981,6 +1061,14 @@
   }
 
   window.addEventListener('hashchange', handleRouteChange);
+  window.addEventListener('resize', () => schedulePlayerViewportSync());
+  window.addEventListener('orientationchange', () => {
+    schedulePlayerViewportSync({ withRotationRetries: true });
+  });
+  window.visualViewport?.addEventListener('resize', () => schedulePlayerViewportSync());
+  screen.orientation?.addEventListener?.('change', () => {
+    schedulePlayerViewportSync({ withRotationRetries: true });
+  });
 
   // ==========================================
   // 7. MODAL CONTROLLERS (ADD/EDIT & DELETE)
@@ -1122,6 +1210,9 @@
   closeDeleteModalBtn.addEventListener('click', () => closeTopLayer(deleteModal));
   cancelDeleteBtn.addEventListener('click', () => closeTopLayer(deleteModal));
 
+  gridModal.addEventListener('close', () => schedulePlayerViewportSync({ withRotationRetries: true }));
+  deleteModal.addEventListener('close', () => schedulePlayerViewportSync({ withRotationRetries: true }));
+
   // Wire up Player HUD buttons
   playerHudToggle.addEventListener('click', (e) => {
     setPlayerHudOpen(true);
@@ -1190,6 +1281,7 @@
 
   document.addEventListener('fullscreenchange', () => {
     fullscreenLabel.textContent = document.fullscreenElement ? 'Exit Fullscreen' : 'Fullscreen';
+    schedulePlayerViewportSync();
   });
 
   // ==========================================

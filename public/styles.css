@@ -83,8 +83,13 @@
   display: none !important;
 }
 
+html {
+  inline-size: 100%;
+}
+
 body {
   margin: 0;
+  inline-size: 100%;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   line-height: 1.5;
   background-color: var(--bg);
@@ -525,9 +530,11 @@ h2:focus,
    PLAYER VIEW (100% SCREEN REAL ESTATE FOR VIDEOS)
    ======================== */
 .player-view {
-  position: relative;
-  inline-size: 100%;
-  block-size: 100dvh;
+  position: fixed;
+  inset-block-start: 0;
+  inset-inline-start: 0;
+  inline-size: var(--player-inline-size, 100%);
+  block-size: var(--player-block-size, 100%);
   background-color: #000000;
   overflow: clip;
 }
@@ -538,7 +545,7 @@ h2:focus,
   grid-template-rows: repeat(2, minmax(0, 1fr));
   gap: 2px;
   inline-size: 100%;
-  block-size: 100dvh;
+  block-size: 100%;
   background-color: #090d16;
 }
 
@@ -553,6 +560,8 @@ h2:focus,
 
 .stream-pane {
   position: relative;
+  min-inline-size: 0;
+  min-block-size: 0;
   inline-size: 100%;
   block-size: 100%;
   background-color: #000000;
@@ -560,6 +569,8 @@ h2:focus,
 }
 
 .stream-frame {
+  position: absolute;
+  inset: 0;
   display: block;
   inline-size: 100%;
   block-size: 100%;
@@ -677,7 +688,7 @@ h2:focus,
   inset-inline-start: max(0.75rem, env(safe-area-inset-left, 0px));
   inset-inline-end: max(0.75rem, env(safe-area-inset-right, 0px));
   inline-size: fit-content;
-  max-inline-size: calc(100dvw - max(0.75rem, env(safe-area-inset-left, 0px)) - max(0.75rem, env(safe-area-inset-right, 0px)));
+  max-inline-size: calc(var(--player-inline-size, 100dvw) - max(0.75rem, env(safe-area-inset-left, 0px)) - max(0.75rem, env(safe-area-inset-right, 0px)));
   z-index: 30;
   pointer-events: none;
 }
