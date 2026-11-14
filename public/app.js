@@ -284,6 +284,7 @@
   const IS_IPAD =
     /iPad/.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const IS_CRIOS = /CriOS/.test(navigator.userAgent);
 
   function buildEmbedUrl(feedEntry) {
     const feed = normalizeFeedEntry(feedEntry);
@@ -949,7 +950,7 @@
     }
   }
 
-  const viewportMeta = document.querySelector('meta[name="viewport"]');
+  let viewportMeta = document.querySelector('meta[name="viewport"]');
   const BASE_VIEWPORT_CONTENT = IS_IPAD
     ? 'width=device-width, initial-scale=1'
     : 'width=device-width, initial-scale=1, viewport-fit=cover';
@@ -961,9 +962,115 @@
 
   let viewportMetaRefreshTimer = null;
   let viewportMetaRetryTimer = null;
+  let forcedLandscapeMetaWidth = 0;
+  let splitViewBypassedLandscapeWidth = false;
+
+  function getViewportMetrics() {
+    const vv = window.visualViewport;
+    const scale = vv && Number.isFinite(vv.scale) && vv.scale > 0 ? vv.scale : 1;
+    const vvWidth = vv && vv.width > 0 ? Math.round(vv.width * scale) : 0;
+    const vvHeight = vv && vv.height > 0 ? Math.round(vv.height * scale) : 0;
+    const innerW = Math.round(window.innerWidth || 0);
+    const innerH = Math.round(window.innerHeight || 0);
+    const clientW = Math.round(document.documentElement.clientWidth || 0);
+    const clientH = Math.round(document.documentElement.clientHeight || 0);
+    return { scale, vvWidth, vvHeight, innerW, innerH, clientW, clientH };
+  }
+
+  function getIPadOrientationState() {
+    const screenW = Math.round(window.screen?.width || 0);
+    const screenH = Math.round(window.screen?.height || 0);
+    const minScreenDim = Math.min(screenW, screenH);
+    const maxScreenDim = Math.max(screenW, screenH);
+    const orientType = window.screen?.orientation?.type || '';
+    const legacyAngle = typeof window.orientation === 'number' ? Math.abs(window.orientation) : null;
+    const isPhysicalLandscape =
+      orientType.startsWith('landscape') ||
+      legacyAngle === 90 ||
+      Boolean(window.matchMedia?.('(orientation: landscape)')?.matches);
+    return { minScreenDim, maxScreenDim, isPhysicalLandscape };
+  }
+
+  function isIPadLandscapeWidthStuck(orientationState, reportedW, reportedH) {
+    const { minScreenDim, maxScreenDim, isPhysicalLandscape } = orientationState;
+    return (
+      isPhysicalLandscape &&
+      minScreenDim > 0 &&
+      maxScreenDim > minScreenDim &&
+      reportedH > 0 &&
+      reportedH < minScreenDim - 16 &&
+      Math.abs(reportedW - minScreenDim) <= 12
+    );
+  }
+
+  function setViewportMetaContent(nextContent, { forceReparse = false } = {}) {
+    if (!viewportMeta) return;
+    if (viewportMeta.getAttribute('content') === nextContent) {
+      if (!forceReparse) return;
+      const freshMeta = document.createElement('meta');
+      freshMeta.setAttribute('name', 'viewport');
+      freshMeta.setAttribute('content', nextContent);
+      viewportMeta.replaceWith(freshMeta);
+      viewportMeta = freshMeta;
+      return;
+    }
+    viewportMeta.setAttribute('content', nextContent);
+  }
+
+  function reconcileIPadViewport({ allowMetaMutation = true, forceReparse = false } = {}) {
+    if (!IS_IPAD || !viewportMeta) return;
+    const { scale, vvWidth, vvHeight, innerW, innerH, clientW, clientH } = getViewportMetrics();
+    const orientationState = getIPadOrientationState();
+    const { minScreenDim, maxScreenDim, isPhysicalLandscape } = orientationState;
+
+    if (minScreenDim <= 0 || maxScreenDim <= minScreenDim) return;
+
+    const reportedW = Math.max(vvWidth, innerW, clientW);
+    const reportedH = vvHeight || innerH || clientH;
+
+    if (!isPhysicalLandscape) {
+      splitViewBypassedLandscapeWidth = false;
+      forcedLandscapeMetaWidth = 0;
+      setViewportMetaContent(BASE_VIEWPORT_CONTENT, {
+        forceReparse: forceReparse && reportedW > minScreenDim + 12
+      });
+      return;
+    }
+
+    if (reportedW > minScreenDim + 12 || (reportedW > 0 && reportedW < minScreenDim - 16)) {
+      splitViewBypassedLandscapeWidth = false;
+    }
+
+    // If forcing landscape width zoomed the page out, WKWebView is inside a narrower Split View window
+    if (forcedLandscapeMetaWidth > 0 && scale < 0.92) {
+      splitViewBypassedLandscapeWidth = true;
+      forcedLandscapeMetaWidth = 0;
+      setViewportMetaContent(BASE_VIEWPORT_CONTENT, { forceReparse: true });
+      return;
+    }
+
+    if (
+      allowMetaMutation &&
+      !splitViewBypassedLandscapeWidth &&
+      isIPadLandscapeWidthStuck(orientationState, reportedW, reportedH)
+    ) {
+      forcedLandscapeMetaWidth = maxScreenDim;
+      setViewportMetaContent(`width=${maxScreenDim}, initial-scale=1`, { forceReparse });
+      if (forceReparse) {
+        // Nudge WKWebView visible-rect invalidation without shifting resting scroll position
+        const prevY = window.scrollY;
+        window.scrollBy(0, 1);
+        window.scrollTo(window.scrollX, prevY);
+      }
+    }
+  }
 
   function refreshIOSViewportMeta() {
     if (!IS_IOS || !viewportMeta) return;
+    if (IS_IPAD) {
+      reconcileIPadViewport({ allowMetaMutation: IS_CRIOS, forceReparse: true });
+      return;
+    }
     if (viewportMetaRefreshTimer) {
       clearTimeout(viewportMetaRefreshTimer);
       viewportMetaRefreshTimer = null;
@@ -986,9 +1093,13 @@
     }
     refreshIOSViewportMeta();
     viewportMetaRetryTimer = setTimeout(() => {
-      refreshIOSViewportMeta();
+      if (IS_IPAD) {
+        reconcileIPadViewport({ allowMetaMutation: true, forceReparse: true });
+      } else {
+        refreshIOSViewportMeta();
+      }
       viewportMetaRetryTimer = null;
-    }, 120);
+    }, 380);
   }
 
   let playerViewportTimers = [];
@@ -1005,7 +1116,11 @@
     playerView.style.removeProperty('--player-block-size');
   }
 
-  function syncPlayerViewport() {
+  function syncPlayerViewport({ fromTimer = false } = {}) {
+    if (IS_IPAD) {
+      reconcileIPadViewport({ allowMetaMutation: IS_CRIOS || fromTimer });
+    }
+
     if (playerView.hidden || document.fullscreenElement) {
       clearPlayerViewportOverrides();
       return;
@@ -1016,36 +1131,24 @@
       return;
     }
 
-    const vv = window.visualViewport;
-    const scale = vv && Number.isFinite(vv.scale) && vv.scale > 0 ? vv.scale : 1;
-    const vvWidth = vv && vv.width > 0 ? Math.round(vv.width * scale) : 0;
-    const vvHeight = vv && vv.height > 0 ? Math.round(vv.height * scale) : 0;
-    const innerW = Math.round(window.innerWidth || 0);
-    const innerH = Math.round(window.innerHeight || 0);
-    const clientW = Math.round(document.documentElement.clientWidth || 0);
-    const clientH = Math.round(document.documentElement.clientHeight || 0);
+    const { scale, vvWidth, vvHeight, innerW, innerH, clientW, clientH } = getViewportMetrics();
 
     let vpWidth = IS_IOS ? Math.max(vvWidth, innerW, clientW) : vvWidth || innerW || clientW;
     const vpHeight = vvHeight || innerH || clientH;
 
     if (vpWidth <= 0 || vpHeight <= 0) return;
 
-    if (IS_IPAD) {
-      const minScreenDim = Math.min(window.screen.width || 0, window.screen.height || 0);
-      const maxScreenDim = Math.max(window.screen.width || 0, window.screen.height || 0);
-      const isLandscape = window.matchMedia?.('(orientation: landscape)').matches;
+    if (IS_IPAD && !splitViewBypassedLandscapeWidth && scale >= 0.95) {
+      const orientationState = getIPadOrientationState();
       const outerW = Math.round(window.outerWidth || 0);
 
-      // If WKWebView clamps visualViewport/innerWidth to portrait width while rotated to landscape,
-      // outerWidth reflects the active iPadOS Chrome tab / Split View container width.
-      if (
-        isLandscape &&
-        minScreenDim > 0 &&
-        vpWidth <= minScreenDim + 2 &&
-        outerW > vpWidth &&
-        (maxScreenDim === 0 || outerW <= maxScreenDim)
-      ) {
-        vpWidth = outerW;
+      // On iPadOS Chrome (WKWebView), rotating portrait -> landscape can clamp innerWidth and
+      // visualViewport.width to portrait device-width even though the WebView paints full width.
+      if (isIPadLandscapeWidthStuck(orientationState, vpWidth, vpHeight)) {
+        vpWidth =
+          outerW > vpWidth && outerW <= orientationState.maxScreenDim
+            ? outerW
+            : orientationState.maxScreenDim;
       }
     }
 
@@ -1079,6 +1182,9 @@
     clearPlayerViewportSyncTimers();
     if (playerView.hidden) {
       clearPlayerViewportOverrides();
+      if (IS_IPAD) {
+        reconcileIPadViewport({ allowMetaMutation: IS_CRIOS });
+      }
       return;
     }
 
@@ -1086,9 +1192,16 @@
 
     if (withRotationRetries || IS_IOS) {
       // iOS/iPadOS WKWebView updates visualViewport/innerWidth asynchronously after rotation completes
-      const delays = withRotationRetries ? [50, 180, 380, 650] : [60, 220];
+      const delays = withRotationRetries ? [50, 180, 380, 650, 950] : [60, 220];
       for (const delay of delays) {
-        playerViewportTimers.push(setTimeout(() => syncPlayerViewport(), delay));
+        playerViewportTimers.push(
+          setTimeout(() => {
+            if (IS_IPAD && delay >= 350) {
+              reconcileIPadViewport({ allowMetaMutation: true, forceReparse: true });
+            }
+            syncPlayerViewport({ fromTimer: true });
+          }, delay)
+        );
       }
     }
   }
@@ -1108,11 +1221,8 @@
       activeGridId = grid.id;
       document.title = `${grid.name} — GridTube`;
 
-      if (IS_IPAD && window.matchMedia?.('(orientation: landscape)').matches) {
-        const minScreenDim = Math.min(window.screen.width || 0, window.screen.height || 0);
-        if (minScreenDim > 0 && window.innerWidth <= minScreenDim + 2) {
-          scheduleIOSViewportMetaRefresh();
-        }
+      if (IS_IPAD) {
+        reconcileIPadViewport({ allowMetaMutation: true, forceReparse: IS_CRIOS });
       }
 
       runViewTransition(() => {
