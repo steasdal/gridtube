@@ -281,6 +281,9 @@
   const IS_IOS =
     /iPad|iPhone|iPod/.test(navigator.userAgent) ||
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const IS_IPAD =
+    /iPad/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
   function buildEmbedUrl(feedEntry) {
     const feed = normalizeFeedEntry(feedEntry);
@@ -946,6 +949,48 @@
     }
   }
 
+  const viewportMeta = document.querySelector('meta[name="viewport"]');
+  const BASE_VIEWPORT_CONTENT = IS_IPAD
+    ? 'width=device-width, initial-scale=1'
+    : 'width=device-width, initial-scale=1, viewport-fit=cover';
+
+  if (IS_IPAD && viewportMeta) {
+    // iPads have no notch; viewport-fit=cover can lock WKWebView layout width to portrait on rotation
+    viewportMeta.setAttribute('content', BASE_VIEWPORT_CONTENT);
+  }
+
+  let viewportMetaRefreshTimer = null;
+  let viewportMetaRetryTimer = null;
+
+  function refreshIOSViewportMeta() {
+    if (!IS_IOS || !viewportMeta) return;
+    if (viewportMetaRefreshTimer) {
+      clearTimeout(viewportMetaRefreshTimer);
+      viewportMetaRefreshTimer = null;
+    }
+    viewportMeta.setAttribute(
+      'content',
+      BASE_VIEWPORT_CONTENT.replace('initial-scale=1', 'initial-scale=1.0001')
+    );
+    viewportMetaRefreshTimer = setTimeout(() => {
+      viewportMeta.setAttribute('content', BASE_VIEWPORT_CONTENT);
+      viewportMetaRefreshTimer = null;
+    }, 50);
+  }
+
+  function scheduleIOSViewportMetaRefresh() {
+    if (!IS_IOS || !viewportMeta) return;
+    if (viewportMetaRetryTimer) {
+      clearTimeout(viewportMetaRetryTimer);
+      viewportMetaRetryTimer = null;
+    }
+    refreshIOSViewportMeta();
+    viewportMetaRetryTimer = setTimeout(() => {
+      refreshIOSViewportMeta();
+      viewportMetaRetryTimer = null;
+    }, 120);
+  }
+
   let playerViewportTimers = [];
 
   function clearPlayerViewportSyncTimers() {
@@ -973,10 +1018,36 @@
 
     const vv = window.visualViewport;
     const scale = vv && Number.isFinite(vv.scale) && vv.scale > 0 ? vv.scale : 1;
-    const vpWidth = vv && vv.width > 0 ? Math.round(vv.width * scale) : Math.round(window.innerWidth);
-    const vpHeight = vv && vv.height > 0 ? Math.round(vv.height * scale) : Math.round(window.innerHeight);
+    const vvWidth = vv && vv.width > 0 ? Math.round(vv.width * scale) : 0;
+    const vvHeight = vv && vv.height > 0 ? Math.round(vv.height * scale) : 0;
+    const innerW = Math.round(window.innerWidth || 0);
+    const innerH = Math.round(window.innerHeight || 0);
+    const clientW = Math.round(document.documentElement.clientWidth || 0);
+    const clientH = Math.round(document.documentElement.clientHeight || 0);
+
+    let vpWidth = IS_IOS ? Math.max(vvWidth, innerW, clientW) : vvWidth || innerW || clientW;
+    const vpHeight = vvHeight || innerH || clientH;
 
     if (vpWidth <= 0 || vpHeight <= 0) return;
+
+    if (IS_IPAD) {
+      const minScreenDim = Math.min(window.screen.width || 0, window.screen.height || 0);
+      const maxScreenDim = Math.max(window.screen.width || 0, window.screen.height || 0);
+      const isLandscape = window.matchMedia?.('(orientation: landscape)').matches;
+      const outerW = Math.round(window.outerWidth || 0);
+
+      // If WKWebView clamps visualViewport/innerWidth to portrait width while rotated to landscape,
+      // outerWidth reflects the active iPadOS Chrome tab / Split View container width.
+      if (
+        isLandscape &&
+        minScreenDim > 0 &&
+        vpWidth <= minScreenDim + 2 &&
+        outerW > vpWidth &&
+        (maxScreenDim === 0 || outerW <= maxScreenDim)
+      ) {
+        vpWidth = outerW;
+      }
+    }
 
     if (!IS_IOS) {
       clearPlayerViewportOverrides();
@@ -1037,6 +1108,13 @@
       activeGridId = grid.id;
       document.title = `${grid.name} — GridTube`;
 
+      if (IS_IPAD && window.matchMedia?.('(orientation: landscape)').matches) {
+        const minScreenDim = Math.min(window.screen.width || 0, window.screen.height || 0);
+        if (minScreenDim > 0 && window.innerWidth <= minScreenDim + 2) {
+          scheduleIOSViewportMetaRefresh();
+        }
+      }
+
       runViewTransition(() => {
         landingView.hidden = true;
         playerView.hidden = false;
@@ -1063,10 +1141,12 @@
   window.addEventListener('hashchange', handleRouteChange);
   window.addEventListener('resize', () => schedulePlayerViewportSync());
   window.addEventListener('orientationchange', () => {
+    scheduleIOSViewportMetaRefresh();
     schedulePlayerViewportSync({ withRotationRetries: true });
   });
   window.visualViewport?.addEventListener('resize', () => schedulePlayerViewportSync());
   screen.orientation?.addEventListener?.('change', () => {
+    scheduleIOSViewportMetaRefresh();
     schedulePlayerViewportSync({ withRotationRetries: true });
   });
 
