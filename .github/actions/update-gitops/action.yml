@@ -1,0 +1,58 @@
+name: "Update GitOps Image Tag"
+description: "Updates a Kubernetes manifest image tag in steasdal/gitops and commits/pushes if changed."
+
+inputs:
+  target_file:
+    description: "Relative path inside steasdal/gitops to update"
+    required: true
+  commit_prefix:
+    description: "Commit message prefix (e.g. chore(gridtube-dev))"
+    required: true
+  image_ref:
+    description: "Full container image reference including tag"
+    required: true
+  environment_label:
+    description: "Environment label for logs and summary (dev or prod)"
+    required: true
+  deploy_key:
+    description: "SSH deploy key for steasdal/gitops"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout GitOps repository
+      uses: actions/checkout@v4
+      with:
+        repository: steasdal/gitops
+        ref: main
+        ssh-key: ${{ inputs.deploy_key }}
+        path: gitops
+
+    - name: Update manifest and push if changed
+      shell: bash
+      env:
+        TARGET_FILE: ${{ inputs.target_file }}
+        COMMIT_PREFIX: ${{ inputs.commit_prefix }}
+        IMAGE_REF: ${{ inputs.image_ref }}
+        ENV_LABEL: ${{ inputs.environment_label }}
+      run: |
+        set -euo pipefail
+        if [ -z "$IMAGE_REF" ]; then
+          echo "Error: image_ref is empty"
+          exit 1
+        fi
+        echo "Updating ${TARGET_FILE} (${ENV_LABEL}) to image: ${IMAGE_REF}"
+        cd gitops
+        sed -i -E "s|(image:[[:space:]]*)ghcr\.io/steasdal/gridtube:[^[:space:]]+|\1${IMAGE_REF}|" "$TARGET_FILE"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        if git diff --quiet "$TARGET_FILE"; then
+          echo "No changes to commit in ${TARGET_FILE}"
+        else
+          git add "$TARGET_FILE"
+          git commit -m "${COMMIT_PREFIX}: update ${ENV_LABEL} image to ${IMAGE_REF#*:}"
+          git pull --rebase origin main
+          git push origin main
+          echo "Updated \`steasdal/gitops\` (\`${TARGET_FILE}\`) to \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
+        fi
