@@ -1,4 +1,4 @@
-import type { FeedEntry, Grid } from '$lib/types';
+import type { AuthUser, FeedEntry, Grid, UserRole } from '$lib/types';
 
 export async function requestJson<T>(
   url: string,
@@ -86,5 +86,86 @@ export function deleteGridApi(id: string): Promise<{ deleted: string }> {
       headers: { 'Content-Type': 'application/json' }
     },
     'Failed to delete grid.'
+  );
+}
+
+export function loginApi(payload: { username: string; password: string }): Promise<{ user: AuthUser }> {
+  return requestJson<{ user: AuthUser }>(
+    '/api/auth/login',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    },
+    'Could not sign in.'
+  );
+}
+
+export function logoutApi(): Promise<{ ok: boolean }> {
+  return requestJson<{ ok: boolean }>(
+    '/api/auth/logout',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    },
+    'Could not log out.'
+  );
+}
+
+export function updateProfileApi(payload: {
+  username?: string;
+  currentPassword?: string;
+  newPassword?: string;
+}): Promise<{ user: AuthUser }> {
+  return requestJson<{ user: AuthUser }>(
+    '/api/profile',
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    },
+    'Could not update profile.'
+  );
+}
+
+export function createUserApi(payload: {
+  username: string;
+  password: string;
+  role: UserRole;
+}): Promise<{ user: AuthUser }> {
+  return requestJson<{ user: AuthUser }>(
+    '/api/users',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    },
+    'Could not create user.'
+  );
+}
+
+export function updateUserApi(
+  id: string,
+  payload: { username: string; role: UserRole; password?: string }
+): Promise<{ user: AuthUser }> {
+  return requestJson<{ user: AuthUser }>(
+    `/api/users/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    },
+    'Could not update user.'
+  );
+}
+
+export function deleteUserApi(id: string): Promise<{ deleted: string }> {
+  return requestJson<{ deleted: string }>(
+    `/api/users/${encodeURIComponent(id)}`,
+    {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' }
+    },
+    'Failed to delete user.'
   );
 }

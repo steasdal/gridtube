@@ -217,6 +217,7 @@ h2:focus,
 
 .header-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: safe center;
   gap: 0.75rem;
 }
@@ -230,6 +231,7 @@ h2:focus,
   font: inherit;
   font-weight: 600;
   font-size: 0.95rem;
+  text-decoration: none;
   min-block-size: 44px;
   padding-block: 0.55rem;
   padding-inline: 1.1rem;
@@ -996,7 +998,8 @@ dialog::backdrop {
   margin-block-end: 0.15rem;
 }
 
-input[type="text"] {
+input[type="text"],
+input[type="password"] {
   font: inherit;
   font-size: max(1rem, 1em);
   inline-size: 100%;
@@ -1011,12 +1014,14 @@ input[type="text"] {
 }
 
 @media (pointer: coarse) {
-  input[type="text"] {
+  input[type="text"],
+  input[type="password"] {
     min-block-size: 52px;
   }
 }
 
-input[type="text"]:focus-visible {
+input[type="text"]:focus-visible,
+input[type="password"]:focus-visible {
   outline: 3px solid var(--brand);
   outline-offset: 2px;
 }
@@ -1260,4 +1265,278 @@ input[type="range"].volume-slider:focus-visible {
   color: var(--danger);
   font-size: 0.875rem;
   font-weight: 600;
+}
+
+/* ========================
+   AUTH, PROFILE & ADMIN UI
+   ======================== */
+.password-input-wrap {
+  position: relative;
+  inline-size: 100%;
+}
+
+.password-input-wrap input {
+  padding-inline-end: 3.1rem;
+}
+
+.password-toggle-btn {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-end: 0.35rem;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: safe center;
+  justify-content: center;
+  inline-size: 40px;
+  block-size: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.password-toggle-btn:hover {
+  background-color: var(--surface-elevated);
+  color: var(--text);
+}
+
+.password-toggle-btn:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.auth-shell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-block-size: 100dvh;
+  max-inline-size: 460px;
+  margin-inline: auto;
+  padding-block: max(1.5rem, env(safe-area-inset-top, 0px)) max(1.5rem, env(safe-area-inset-bottom, 0px));
+  padding-inline: max(1.25rem, env(safe-area-inset-left, 0px)) max(1.25rem, env(safe-area-inset-right, 0px));
+}
+
+.auth-card {
+  padding: clamp(1.35rem, 3vw, 2rem);
+  border-radius: 16px;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 20px 50px rgb(0 0 0 / 0.25);
+}
+
+.auth-brand {
+  display: flex;
+  align-items: safe center;
+  gap: 1rem;
+  margin-block-end: 1.5rem;
+}
+
+.auth-form .form-server-error {
+  margin-block-start: 0;
+  margin-block-end: 1rem;
+}
+
+.auth-submit-btn {
+  inline-size: 100%;
+  margin-block-start: 0.25rem;
+}
+
+.account-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  max-inline-size: 560px;
+}
+
+.panel-card {
+  padding: clamp(1.15rem, 2.5vw, 1.65rem);
+  border-radius: 14px;
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.panel-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-block-end: 1rem;
+}
+
+.panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-block-start: 1.15rem;
+}
+
+.role-fieldset {
+  margin: 0 0 1.15rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background-color: var(--surface-elevated);
+}
+
+.role-fieldset legend {
+  padding-inline: 0.35rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.role-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-block-start: 0.25rem;
+}
+
+.role-option {
+  display: inline-flex;
+  align-items: safe center;
+  gap: 0.45rem;
+  min-block-size: var(--target-size);
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.role-badge {
+  display: inline-flex;
+  align-items: safe center;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: capitalize;
+  border: 1px solid var(--border);
+  background-color: var(--surface-elevated);
+  color: var(--text-muted);
+}
+
+.role-badge-admin {
+  border-color: var(--brand);
+  background-color: rgb(59 130 246 / 0.16);
+  color: var(--brand-hover);
+}
+
+/* Responsive Users Table */
+.table-panel {
+  padding: 0;
+  overflow: auto;
+  max-block-size: min(65dvh, 640px);
+  container-type: inline-size;
+}
+
+.table-wrapper:focus-visible {
+  outline: 3px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.users-table {
+  inline-size: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  text-align: start;
+  --label-role: "Role";
+  --label-actions: "Actions";
+}
+
+.users-table thead {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 2;
+  background-color: var(--surface-elevated);
+}
+
+.users-table th,
+.users-table td {
+  padding: 0.85rem 1.15rem;
+  border-block-end: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.users-table thead th {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.users-table tbody tr:last-child th,
+.users-table tbody tr:last-child td {
+  border-block-end: 0;
+}
+
+.users-table tbody th {
+  font-weight: 650;
+  position: sticky;
+  inset-inline-start: 0;
+  background-color: var(--surface);
+}
+
+.users-table .actions-col,
+.users-table .user-actions-cell {
+  text-align: end;
+}
+
+.users-table .user-actions-cell .card-actions {
+  justify-content: flex-end;
+}
+
+@container (width < 520px) {
+  .users-table,
+  .users-table thead,
+  .users-table tbody,
+  .users-table tr,
+  .users-table th,
+  .users-table td {
+    display: block;
+  }
+
+  .users-table thead {
+    display: none;
+  }
+
+  .users-table tbody tr {
+    border-block-end: 1px solid var(--border);
+    padding-block: 0.5rem;
+  }
+
+  .users-table tbody tr:last-child {
+    border-block-end: 0;
+  }
+
+  .users-table th,
+  .users-table td {
+    border-block-end: 0;
+    padding: 0.45rem 1rem;
+  }
+
+  .users-table tbody th {
+    position: sticky;
+    inset-block-start: 0;
+    z-index: 1;
+    background-color: var(--surface-elevated);
+    font-size: 1rem;
+  }
+
+  .users-table td.user-role-cell::before {
+    content: var(--label-role) ": ";
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-inline-end: 0.4rem;
+  }
+
+  .users-table td.user-actions-cell {
+    display: flex;
+    align-items: safe center;
+    justify-content: space-between;
+  }
+
+  .users-table td.user-actions-cell::before {
+    content: var(--label-actions);
+    color: var(--text-muted);
+    font-weight: 600;
+  }
 }

@@ -15,6 +15,13 @@
       "when": 1794944746007,
       "tag": "0001_low_mantis",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794950587649,
+      "tag": "0002_blue_newton_destine",
+      "breakpoints": true
     }
   ]
 }
