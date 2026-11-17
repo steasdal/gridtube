@@ -1,0 +1,227 @@
+name: CI / Build & Deploy
+
+on:
+  push:
+    branches:
+      - develop
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]*"
+      - "v[0-9]+.[0-9]+.[0-9]*"
+  pull_request:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  syntax-check:
+    name: Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Verify application JavaScript syntax
+        run: |
+          node --check server.js
+          node --check public/app.js
+
+  docker-lint:
+    name: Docker Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Lint Dockerfile with Buildx checks
+        run: docker buildx build --check .
+
+  smoke-test:
+    name: API & Server Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run server smoke suite
+        run: npm test
+
+  docker-build-push:
+    name: Docker Build & Push
+    needs:
+      - syntax-check
+      - docker-lint
+      - smoke-test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      dev_image: ${{ steps.select-outputs.outputs.dev_image }}
+      release_image: ${{ steps.select-outputs.outputs.release_image }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU for multi-arch builds
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry (ghcr.io)
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata (develop / PR)
+        id: meta-dev
+        if: github.ref_type != 'tag'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix=develop-
+
+      - name: Extract Docker metadata (release tag)
+        id: meta-release
+        if: github.ref_type == 'tag'
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest
+
+      - name: Stamp version into version.yml
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          FULL_SHA: ${{ github.sha }}
+        run: |
+          if [ "$REF_TYPE" = "tag" ]; then
+            echo "version: ${REF_NAME#v}" > version.yml
+          else
+            echo "version: ${FULL_SHA::7}" > version.yml
+          fi
+          cat version.yml
+
+      - name: Build and push multi-arch Docker image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta-release.outputs.tags || steps.meta-dev.outputs.tags }}
+          labels: ${{ steps.meta-release.outputs.labels || steps.meta-dev.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Compute single-line deploy image outputs
+        id: select-outputs
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          EVENT_NAME: ${{ github.event_name }}
+          DEV_TAGS: ${{ steps.meta-dev.outputs.tags }}
+          RELEASE_TAGS: ${{ steps.meta-release.outputs.tags }}
+        run: |
+          DEV_IMAGE=""
+          RELEASE_IMAGE=""
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            if [ "$REF_TYPE" = "tag" ]; then
+              RELEASE_IMAGE=$(grep -v ':latest$' <<< "$RELEASE_TAGS" | grep -v '^$' | head -n 1 || true)
+            else
+              DEV_IMAGE=$(grep -E ':develop-[0-9a-f]+$' <<< "$DEV_TAGS" | head -n 1 || true)
+            fi
+          fi
+          echo "dev_image=${DEV_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "release_image=${RELEASE_IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Write build summary
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAGS: ${{ steps.meta-release.outputs.tags || steps.meta-dev.outputs.tags }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          {
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo "### Verified Container Image Build (PR — not pushed)"
+            else
+              echo "### Published Container Image Tags"
+            fi
+            echo ""
+            echo "| Image Tag | Platforms | Digest |"
+            echo "| :--- | :--- | :--- |"
+            while IFS= read -r tag; do
+              [ -n "$tag" ] && echo "| \`$tag\` | \`linux/amd64, linux/arm64\` | \`$DIGEST\` |"
+            done <<< "$TAGS"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-dev:
+    name: Deploy Dev (GitOps)
+    needs:
+      - docker-build-push
+    if: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/develop' && needs.docker-build-push.outputs.dev_image != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GridTube action helpers
+        uses: actions/checkout@v4
+
+      - name: Update dev manifest in GitOps repository
+        uses: ./.github/actions/update-gitops
+        with:
+          target_file: apps/gridtube/dev/02-app.yaml
+          commit_prefix: chore(gridtube-dev)
+          image_ref: ${{ needs.docker-build-push.outputs.dev_image }}
+          environment_label: dev
+          deploy_key: ${{ secrets.GITOPS_DEPLOY_KEY }}
+
+  deploy-prod:
+    name: Deploy Prod (GitOps)
+    needs:
+      - docker-build-push
+    if: ${{ github.ref_type == 'tag' && needs.docker-build-push.outputs.release_image != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GridTube action helpers
+        uses: actions/checkout@v4
+
+      - name: Update prod manifest in GitOps repository
+        uses: ./.github/actions/update-gitops
+        with:
+          target_file: apps/gridtube/prod/02-app.yaml
+          commit_prefix: chore(gridtube)
+          image_ref: ${{ needs.docker-build-push.outputs.release_image }}
+          environment_label: production
+          deploy_key: ${{ secrets.GITOPS_DEPLOY_KEY }}
