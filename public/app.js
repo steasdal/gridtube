@@ -310,8 +310,9 @@
   }
 
   // Track initial audio sync per iframe so opening a grid always enforces saved config,
-  // while manual adjustments inside the YouTube player during a session aren't overwritten
+  // while subsequent manual volume/mute adjustments in the YouTube player persist back to config
   const iframeAudioSyncState = new WeakMap();
+  const AUDIO_COMMAND_ECHO_SUPPRESS_MS = 900;
 
   function postYouTubeCommand(iframe, func, args = []) {
     if (!iframe?.contentWindow) return;
@@ -333,6 +334,9 @@
     if (!iframe?.contentWindow) return;
     const feed = normalizeFeedEntry(feedEntry);
     const state = iframeAudioSyncState.get(iframe);
+    if (state) {
+      state.suppressAudioPersistUntil = Date.now() + AUDIO_COMMAND_ECHO_SUPPRESS_MS;
+    }
     const shouldMute = IS_IOS
       ? !state?.userUnmuted
       : (feed.muted || feed.volume === 0);
@@ -349,6 +353,7 @@
     const state = iframeAudioSyncState.get(iframe);
     if (!state) return;
 
+    const now = Date.now();
     const nextUnmuted = !state.userUnmuted;
     if (nextUnmuted) {
       // On iOS/mobile, mute other panes cleanly so only one audio stream plays at a time
@@ -357,6 +362,7 @@
         const otherState = iframeAudioSyncState.get(otherFrame);
         if (otherState?.userUnmuted) {
           otherState.userUnmuted = false;
+          otherState.suppressAudioPersistUntil = now + AUDIO_COMMAND_ECHO_SUPPRESS_MS;
           setPaneAudioButtonState(otherState.audioBtn, false);
           postYouTubeCommand(otherFrame, 'mute', []);
         }
@@ -364,6 +370,7 @@
 
       state.userUnmuted = true;
       state.syncedOnPlay = true;
+      state.suppressAudioPersistUntil = now + AUDIO_COMMAND_ECHO_SUPPRESS_MS;
       setPaneAudioButtonState(state.audioBtn, true);
       const targetVolume = state.feed.volume > 0 ? state.feed.volume : 100;
       postYouTubeCommand(iframe, 'unMute', []);
@@ -371,23 +378,27 @@
       postYouTubeCommand(iframe, 'playVideo', []);
     } else {
       state.userUnmuted = false;
+      state.suppressAudioPersistUntil = now + AUDIO_COMMAND_ECHO_SUPPRESS_MS;
       setPaneAudioButtonState(state.audioBtn, false);
       postYouTubeCommand(iframe, 'mute', []);
     }
   }
 
-  function registerIframeAudioInit(iframe, paneIndex, feedEntry, audioBtn = null) {
+  function registerIframeAudioInit(iframe, gridId, paneIndex, feedEntry, audioBtn = null) {
     const feed = normalizeFeedEntry(feedEntry);
     iframeAudioSyncState.set(iframe, {
+      gridId,
       paneIndex,
       feed,
       audioBtn,
       userUnmuted: !(IS_IOS || feed.muted || feed.volume === 0),
-      syncedOnPlay: false
+      syncedOnPlay: false,
+      suppressAudioPersistUntil: Date.now() + AUDIO_COMMAND_ECHO_SUPPRESS_MS
     });
 
     const startListening = () => {
       if (!iframe.contentWindow) return;
+      const currentState = iframeAudioSyncState.get(iframe);
       iframe.contentWindow.postMessage(
         JSON.stringify({
           event: 'listening',
@@ -396,7 +407,9 @@
         }),
         '*'
       );
-      sendYouTubeAudioCommands(iframe, feed);
+      if (!currentState?.syncedOnPlay) {
+        sendYouTubeAudioCommands(iframe, currentState?.feed || feed);
+      }
     };
 
     iframe.addEventListener('load', () => {
@@ -424,28 +437,36 @@
       const state = iframeAudioSyncState.get(iframe);
       if (!state) break;
 
-      if (data.event === 'infoDelivery' && data.info && typeof data.info.muted === 'boolean') {
-        const isUnmuted = !data.info.muted;
-        if (state.syncedOnPlay || isUnmuted) {
-          state.userUnmuted = isUnmuted;
-          setPaneAudioButtonState(state.audioBtn, isUnmuted);
+      let ranInitialSyncNow = false;
+      if (!state.syncedOnPlay) {
+        if (data.event === 'onReady') {
+          sendYouTubeAudioCommands(iframe, state.feed);
+        } else if (data.event === 'onStateChange' && data.info === 1) {
+          sendYouTubeAudioCommands(iframe, state.feed);
+          state.syncedOnPlay = true;
+          ranInitialSyncNow = true;
+        } else if (
+          data.event === 'infoDelivery' &&
+          data.info &&
+          data.info.playerState === 1
+        ) {
+          sendYouTubeAudioCommands(iframe, state.feed);
+          state.syncedOnPlay = true;
+          ranInitialSyncNow = true;
         }
       }
 
-      if (state.syncedOnPlay) break;
-
-      if (data.event === 'onReady') {
-        sendYouTubeAudioCommands(iframe, state.feed);
-      } else if (data.event === 'onStateChange' && data.info === 1) {
-        sendYouTubeAudioCommands(iframe, state.feed);
-        state.syncedOnPlay = true;
-      } else if (
-        data.event === 'infoDelivery' &&
-        data.info &&
-        data.info.playerState === 1
-      ) {
-        sendYouTubeAudioCommands(iframe, state.feed);
-        state.syncedOnPlay = true;
+      if (data.event === 'infoDelivery' && data.info) {
+        if (typeof data.info.muted === 'boolean') {
+          const isUnmuted = !data.info.muted;
+          if (state.syncedOnPlay || isUnmuted) {
+            state.userUnmuted = isUnmuted;
+            setPaneAudioButtonState(state.audioBtn, isUnmuted);
+          }
+        }
+        if (!ranInitialSyncNow) {
+          applyPaneAudioInfoUpdate(state, data.info);
+        }
       }
       break;
     }
@@ -629,6 +650,132 @@
 
   async function fetchGrids() {
     grids = await requestJson('/api/grids', {}, 'Failed to load saved grids.');
+  }
+
+  const AUDIO_PERSIST_DEBOUNCE_MS = 350;
+  const audioSaveTimers = new Map();
+  const dirtyAudioGridIds = new Set();
+  const inFlightAudioSaves = new Set();
+  const audioSaveRevisions = new Map();
+
+  function markAudioGridDirty(gridId) {
+    audioSaveRevisions.set(gridId, (audioSaveRevisions.get(gridId) || 0) + 1);
+    dirtyAudioGridIds.add(gridId);
+  }
+
+  function clearPendingGridAudioSave(gridId, { clearDirty = false } = {}) {
+    const timerId = audioSaveTimers.get(gridId);
+    if (timerId) {
+      clearTimeout(timerId);
+      audioSaveTimers.delete(gridId);
+    }
+    if (clearDirty) {
+      dirtyAudioGridIds.delete(gridId);
+      audioSaveRevisions.set(gridId, (audioSaveRevisions.get(gridId) || 0) + 1);
+    }
+  }
+
+  async function persistGridAudioConfig(gridId, { keepalive = false } = {}) {
+    if (!gridId || inFlightAudioSaves.has(gridId)) return;
+
+    const grid = grids.find((g) => g.id === gridId);
+    if (!grid) {
+      dirtyAudioGridIds.delete(gridId);
+      return;
+    }
+
+    const saveRevision = audioSaveRevisions.get(gridId) || 0;
+    dirtyAudioGridIds.delete(gridId);
+    inFlightAudioSaves.add(gridId);
+
+    const payload = {
+      name: grid.name,
+      feeds: [0, 1, 2, 3].map((idx) => normalizeFeedEntry(grid.feeds?.[idx]))
+    };
+
+    try {
+      const updated = await requestJson(
+        `/api/grids/${encodeURIComponent(gridId)}`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          keepalive
+        },
+        'Could not save grid audio settings.'
+      );
+      // Only replace in-memory grid if user hasn't made newer volume edits while PUT was in flight
+      if ((audioSaveRevisions.get(gridId) || 0) === saveRevision) {
+        const idx = grids.findIndex((g) => g.id === gridId);
+        if (idx !== -1) {
+          grids[idx] = updated;
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to persist pane audio change:', err);
+    } finally {
+      inFlightAudioSaves.delete(gridId);
+      if (dirtyAudioGridIds.has(gridId)) {
+        persistGridAudioConfig(gridId);
+      }
+    }
+  }
+
+  function scheduleGridAudioPersist(gridId) {
+    clearPendingGridAudioSave(gridId);
+    const timerId = setTimeout(() => {
+      audioSaveTimers.delete(gridId);
+      persistGridAudioConfig(gridId);
+    }, AUDIO_PERSIST_DEBOUNCE_MS);
+    audioSaveTimers.set(gridId, timerId);
+  }
+
+  function flushPendingGridAudioSaves({ keepalive = false } = {}) {
+    const gridIds = new Set([...audioSaveTimers.keys(), ...dirtyAudioGridIds]);
+    for (const gridId of gridIds) {
+      clearPendingGridAudioSave(gridId);
+      persistGridAudioConfig(gridId, { keepalive });
+    }
+  }
+
+  function applyPaneAudioInfoUpdate(state, info) {
+    // iOS locks <video>.volume to hardware controls, so avoid overwriting saved desktop volumes
+    if (IS_IOS) return;
+    if (!state.syncedOnPlay || Date.now() < (state.suppressAudioPersistUntil || 0)) return;
+    if (gridModal.open || deleteModal.open) return;
+
+    const hasVolume = typeof info.volume === 'number' && Number.isFinite(info.volume);
+    const hasMuted = typeof info.muted === 'boolean';
+    if (!hasVolume && !hasMuted) return;
+
+    const prevFeed = state.feed;
+    const nextVolume = hasVolume
+      ? Math.max(0, Math.min(100, Math.round(info.volume)))
+      : prevFeed.volume;
+
+    let nextMuted = prevFeed.muted;
+    if (hasMuted) {
+      nextMuted = info.muted;
+    } else if (hasVolume && nextVolume === 0) {
+      nextMuted = true;
+    } else if (hasVolume && nextVolume > 0 && prevFeed.volume === 0 && prevFeed.muted) {
+      nextMuted = false;
+    }
+
+    if (nextVolume === prevFeed.volume && nextMuted === prevFeed.muted) return;
+
+    const nextFeed = { ...prevFeed, volume: nextVolume, muted: nextMuted };
+    state.feed = nextFeed;
+
+    const grid = grids.find((g) => g.id === state.gridId);
+    if (!grid) return;
+
+    const normalizedFeeds = [0, 1, 2, 3].map((idx) => normalizeFeedEntry(grid.feeds?.[idx]));
+    normalizedFeeds[state.paneIndex] = nextFeed;
+    grid.feeds = normalizedFeeds;
+
+    markAudioGridDirty(state.gridId);
+    scheduleGridAudioPersist(state.gridId);
   }
 
   async function fetchVersion() {
@@ -830,7 +977,7 @@
         audioBtn.addEventListener('click', () => togglePaneAudio(iframe));
       }
 
-      registerIframeAudioInit(iframe, i, feed, audioBtn);
+      registerIframeAudioInit(iframe, grid.id, i, feed, audioBtn);
       pane.appendChild(iframe);
       if (audioBtn) {
         pane.appendChild(audioBtn);
@@ -1233,6 +1380,7 @@
       }, playerView);
       schedulePlayerViewportSync({ withRotationRetries: true });
     } else {
+      flushPendingGridAudioSaves();
       activeGridId = null;
       document.title = 'GridTube — 2×2 YouTube Live Stream Wall';
 
@@ -1249,6 +1397,12 @@
   }
 
   window.addEventListener('hashchange', handleRouteChange);
+  window.addEventListener('pagehide', () => flushPendingGridAudioSaves({ keepalive: true }));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      flushPendingGridAudioSaves({ keepalive: true });
+    }
+  });
   window.addEventListener('resize', () => schedulePlayerViewportSync());
   window.addEventListener('orientationchange', () => {
     scheduleIOSViewportMetaRefresh();
@@ -1279,6 +1433,7 @@
   }
 
   function openEditGridModal(grid, focusFeedIndex = null) {
+    flushPendingGridAudioSaves();
     gridForm.reset();
     resetFormValidationState(gridForm);
     gridIdInput.value = grid.id;
@@ -1325,6 +1480,9 @@
     };
 
     saveGridBtn.disabled = true;
+    if (editingId) {
+      clearPendingGridAudioSave(editingId, { clearDirty: true });
+    }
     try {
       const url = editingId ? `/api/grids/${encodeURIComponent(editingId)}` : '/api/grids';
       const method = editingId ? 'PUT' : 'POST';
@@ -1371,6 +1529,7 @@
     const gridObj = grids.find((g) => g.id === idToDelete);
 
     confirmDeleteBtn.disabled = true;
+    clearPendingGridAudioSave(idToDelete, { clearDirty: true });
     try {
       await requestJson(
         `/api/grids/${encodeURIComponent(idToDelete)}`,
