@@ -39,19 +39,15 @@ PORT=8080 DATA_DIR=./data npm start
 # Open http://localhost:8080
 ```
 
-### 2. Run Locally Against External PostgreSQL
+### 2. Run Locally Against PostgreSQL (via Docker Compose)
 
-Set `DATABASE_URL` before starting the server and GridTube will connect via `pg` and apply Drizzle migrations automatically on startup:
+[docker-compose.yml](docker-compose.yml) includes a `postgres` service wired to `gridtube`. To develop locally with Vite against that Postgres container:
 
 ```bash
-# Example using a local Postgres container
-docker run -d --name gridtube-pg \
-  -e POSTGRES_USER=gridtube \
-  -e POSTGRES_PASSWORD=gridtube \
-  -e POSTGRES_DB=gridtube \
-  -p 5432:5432 \
-  postgres:16-alpine
+# Start only PostgreSQL on 127.0.0.1:5432
+docker compose up -d postgres
 
+# Connect the SvelteKit dev server to it (migrations run automatically on startup)
 DATABASE_URL="postgres://gridtube:gridtube@127.0.0.1:5432/gridtube" npm run dev
 ```
 
@@ -69,22 +65,17 @@ npm test
 npm run db:generate
 ```
 
-### 4. Docker & Docker Compose
+### 4. Full Stack with Docker & Docker Compose (`gridtube` + `postgres`)
 
 ```bash
-# Build and start locally with ./data mounted to /data (embedded PGlite)
+# Build and start both GridTube and PostgreSQL wired together
 docker compose up --build -d
 
-# Or pull and run the published develop/release image
+# Or pull and run the published develop/release image with PostgreSQL
 IMAGE_TAG=develop docker compose up -d
 
-# Or with docker run directly (embedded PGlite)
+# Or run standalone with docker run + embedded PGlite (no external Postgres)
 docker run -d --name gridtube -p 8080:8080 -v "$(pwd)/data:/data" ghcr.io/steasdal/gridtube:latest
-
-# Or with docker run + external PostgreSQL
-docker run -d --name gridtube -p 8080:8080 \
-  -e DATABASE_URL="postgres://user:pass@postgres-host:5432/gridtube" \
-  ghcr.io/steasdal/gridtube:latest
 ```
 
 ---
