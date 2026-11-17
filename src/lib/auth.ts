@@ -45,6 +45,12 @@ export function validateUserRole(raw: unknown): { ok: true; role: UserRole } | {
   return { ok: false, error: 'Role must be "admin" or "user".' };
 }
 
+export function formatDisplayUsername(username: string): string {
+  const trimmed = username.trim();
+  if (!trimmed) return '';
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
 export function sanitizeRedirectPath(raw: string | null | undefined): string {
   if (!raw || typeof raw !== 'string') return '/';
   const trimmed = raw.trim();

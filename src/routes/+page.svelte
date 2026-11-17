@@ -1,6 +1,7 @@
 <script lang="ts">
   import { goto, invalidateAll } from '$app/navigation';
   import { onMount } from 'svelte';
+  import { formatDisplayUsername } from '$lib/auth';
   import { logoutApi } from '$lib/client/api';
   import DeleteConfirmModal from '$lib/components/DeleteConfirmModal.svelte';
   import GridFormModal from '$lib/components/GridFormModal.svelte';
@@ -100,7 +101,9 @@
         <span class="logo-pane logo-pane-4"></span>
       </div>
       <div>
-        <h1 id="landing-heading" class="site-title" tabindex="-1">GridTube</h1>
+        <h1 id="landing-heading" class="site-title" tabindex="-1">
+          GridTube - {formatDisplayUsername(data.user.username)}
+        </h1>
         <p class="site-subtitle">
           2x2 YouTube live stream grid utilizing maximum browser real estate
         </p>
@@ -130,9 +133,7 @@
         </svg>
         <span>New Grid</span>
       </button>
-      <a href="/profile" id="nav-profile-link" class="btn btn-secondary">
-        Profile ({data.user.username})
-      </a>
+      <a href="/profile" id="nav-profile-link" class="btn btn-secondary">Profile</a>
       {#if data.user.role === 'admin'}
         <a href="/admin" id="nav-admin-link" class="btn btn-secondary">Administration</a>
       {/if}
