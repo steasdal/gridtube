@@ -7,6 +7,7 @@ A self-hosted TypeScript web application built with **SvelteKit** and **Drizzle 
 - **100% Viewport 2×2 Video Wall**: In grid view, the four stream panes occupy `100% × 100%` of the viewport with a tucked top-left `Menu ▾` drawer that stays clear of YouTube's built-in controls (plus `f` key fullscreen toggle and iPadOS/iOS mobile support).
 - **Per-Feed Audio & Live Persistence**: Configure Mute/Unmute and `0–100%` volume per pane in the Add/Edit dialog, applied via the YouTube IFrame API; desktop player volume and mute adjustments automatically save back to the grid configuration.
 - **Partial Grid Support**: Any of the 4 feed slots can be left blank and configured later directly from the empty pane.
+- **Role-Based Authentication & Private Grids**: Cookie-backed token sessions (`HttpOnly`, 7-day sliding expiration), strict per-user grid privacy, self-service `/profile` updates, and admin-only `/admin` user management.
 - **PostgreSQL + Embedded PGlite Storage**: Uses external PostgreSQL when `DATABASE_URL` is provided, or embedded **`PGlite`** persisted inside `DATA_DIR` (`/data/pgdata`) with zero external database setup required.
 - **Automatic Startup Migrations & Legacy Import**: Runs Drizzle SQL migrations (`./drizzle`) automatically when the server boots, imports existing `$DATA_DIR/grids.json` data on first upgrade if present, and otherwise seeds the example `choo-choos` grid.
 
@@ -77,6 +78,26 @@ IMAGE_TAG=develop docker compose up -d
 # Or run standalone with docker run + embedded PGlite (no external Postgres)
 docker run -d --name gridtube -p 8080:8080 -v "$(pwd)/data:/data" ghcr.io/steasdal/gridtube:latest
 ```
+
+---
+
+## Authentication & Initial Admin Password
+
+GridTube uses token-based authentication persisted in PostgreSQL/PGlite (`user_sessions`) via a 7-day sliding `HttpOnly` cookie:
+
+- **First-Time Bootstrap**: When the server starts with an empty `users` table, it automatically creates an `admin` account with a randomly generated password and assigns any pre-existing grids to it.
+- **Finding the Initial Password**: Look for the `GRIDTUBE INITIAL ADMIN ACCOUNT CREATED` banner in the container/server stdout logs on first boot:
+
+  ```bash
+  # Docker Compose
+  docker compose logs gridtube | grep -A 6 "GRIDTUBE INITIAL ADMIN ACCOUNT CREATED"
+
+  # Kubernetes (prod or dev)
+  kubectl -n gridtube logs deploy/gridtube | grep -A 6 "GRIDTUBE INITIAL ADMIN ACCOUNT CREATED"
+  ```
+
+- **Profile (`/profile`)**: Any signed-in user can change their username or password (12-character minimum; existing password required).
+- **Administration (`/admin`)**: Admins can create, edit (username, role, optional password reset), and delete other users.
 
 ---
 

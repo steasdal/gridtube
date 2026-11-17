@@ -3,12 +3,13 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { count } from 'drizzle-orm';
+import { asc, count, isNull, sql } from 'drizzle-orm';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { migrate as migratePg } from 'drizzle-orm/node-postgres/migrator';
 import { drizzle as drizzlePglite, type PgliteDatabase } from 'drizzle-orm/pglite';
 import { migrate as migratePglite } from 'drizzle-orm/pglite/migrator';
 import { Pool } from 'pg';
+import { generateInitialAdminPassword, hashPassword } from '$lib/server/password';
 import type { Grid } from '$lib/types';
 import { normalizeFeedsList } from '$lib/youtube';
 import * as schema from './schema';
@@ -55,7 +56,49 @@ interface DbContext {
 
 let dbContextPromise: Promise<DbContext> | null = null;
 
-async function insertGridsWithUrls(db: AppDatabase, items: Grid[]): Promise<void> {
+async function ensureInitialAdminUser(db: AppDatabase): Promise<string> {
+  const existingAdmins = await db
+    .select({ id: schema.users.id, role: schema.users.role })
+    .from(schema.users)
+    .orderBy(asc(schema.users.createdAt));
+
+  if (existingAdmins.length > 0) {
+    const admin = existingAdmins.find((u) => u.role === 'admin') ?? existingAdmins[0];
+    return admin.id;
+  }
+
+  const adminId = crypto.randomUUID();
+  const initialPassword = generateInitialAdminPassword(16);
+  const passwordHash = await hashPassword(initialPassword);
+
+  await db.insert(schema.users).values({
+    id: adminId,
+    username: 'admin',
+    usernameLower: 'admin',
+    passwordHash,
+    role: 'admin',
+    createdAt: new Date().toISOString(),
+    updatedAt: null
+  });
+
+  console.info(
+    [
+      '',
+      '========================================================================',
+      '  GRIDTUBE INITIAL ADMIN ACCOUNT CREATED',
+      '  --------------------------------------------------------------------',
+      '  Username : admin',
+      `  Password : ${initialPassword}`,
+      '  (Save or change this password after logging in at /profile.)',
+      '========================================================================',
+      ''
+    ].join('\n')
+  );
+
+  return adminId;
+}
+
+async function insertGridsWithUrls(db: AppDatabase, items: Grid[], ownerUserId: string): Promise<void> {
   if (items.length === 0) return;
 
   await db.transaction(async (tx) => {
@@ -64,6 +107,7 @@ async function insertGridsWithUrls(db: AppDatabase, items: Grid[]): Promise<void
       .values(
         items.map((grid) => ({
           id: grid.id,
+          userId: grid.userId || ownerUserId,
           name: grid.name,
           createdAt: grid.createdAt,
           updatedAt: grid.updatedAt ?? null
@@ -88,7 +132,11 @@ async function insertGridsWithUrls(db: AppDatabase, items: Grid[]): Promise<void
   });
 }
 
-async function seedOrImportInitialGrids(db: AppDatabase, dataDir: string): Promise<void> {
+async function seedOrImportInitialGrids(
+  db: AppDatabase,
+  dataDir: string,
+  ownerUserId: string
+): Promise<void> {
   const [{ value: existingCount }] = await db.select({ value: count() }).from(schema.grids);
   if (existingCount > 0) return;
 
@@ -111,7 +159,7 @@ async function seedOrImportInitialGrids(db: AppDatabase, dataDir: string): Promi
             updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : null
           }));
         if (items.length > 0) {
-          await insertGridsWithUrls(db, items);
+          await insertGridsWithUrls(db, items, ownerUserId);
           console.info(`Imported ${items.length} grid(s) from legacy ${legacyFile}`);
         }
       }
@@ -121,7 +169,18 @@ async function seedOrImportInitialGrids(db: AppDatabase, dataDir: string): Promi
     }
   }
 
-  await insertGridsWithUrls(db, DEFAULT_GRIDS);
+  await insertGridsWithUrls(db, DEFAULT_GRIDS, ownerUserId);
+}
+
+async function bootstrapDatabaseState(db: AppDatabase, dataDir: string): Promise<void> {
+  const adminUserId = await ensureInitialAdminUser(db);
+
+  // Assign any pre-auth grids (where user_id is NULL after 0002 migration) to initial admin,
+  // then enforce NOT NULL on grids.user_id.
+  await db.update(schema.grids).set({ userId: adminUserId }).where(isNull(schema.grids.userId));
+  await db.execute(sql`ALTER TABLE "grids" ALTER COLUMN "user_id" SET NOT NULL`);
+
+  await seedOrImportInitialGrids(db, dataDir, adminUserId);
 }
 
 async function createDbContext(): Promise<DbContext> {
@@ -134,7 +193,7 @@ async function createDbContext(): Promise<DbContext> {
     const pgDb = drizzlePg(pool, { schema });
     await migratePg(pgDb, { migrationsFolder });
     const db = pgDb as unknown as AppDatabase;
-    await seedOrImportInitialGrids(db, dataDir);
+    await bootstrapDatabaseState(db, dataDir);
     const target = redactDatabaseUrl(databaseUrl);
     console.info(`GridTube database ready (postgres: ${target})`);
     return { db, driver: 'postgres', target };
@@ -146,7 +205,7 @@ async function createDbContext(): Promise<DbContext> {
   await client.waitReady;
   const db = drizzlePglite(client, { schema });
   await migratePglite(db, { migrationsFolder });
-  await seedOrImportInitialGrids(db, dataDir);
+  await bootstrapDatabaseState(db, dataDir);
   console.info(`GridTube database ready (pglite: ${pgDataDir})`);
   return { db, driver: 'pglite', target: pgDataDir };
 }

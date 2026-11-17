@@ -18,23 +18,27 @@ const PORT = 18940 + (process.pid % 1000);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 let tmpDataDir;
 let serverProc;
+let adminInitialPassword;
+let adminCookie;
 
-function request(urlPath, { method = 'GET', body = null } = {}) {
+function requestUrl(baseUrl, urlPath, { method = 'GET', body = null, cookie = '' } = {}) {
   return new Promise((resolve, reject) => {
     const payload = body !== null ? JSON.stringify(body) : null;
+    const headers = {};
+    if (cookie) headers.Cookie = cookie;
+    if (payload) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = Buffer.byteLength(payload);
+    } else if (method !== 'GET') {
+      headers['Content-Type'] = 'application/json';
+    }
+
     const req = http.request(
-      `${BASE_URL}${urlPath}`,
+      `${baseUrl}${urlPath}`,
       {
         method,
         agent: false,
-        headers: payload
-          ? {
-              'Content-Type': 'application/json',
-              'Content-Length': Buffer.byteLength(payload)
-            }
-          : method !== 'GET'
-            ? { 'Content-Type': 'application/json' }
-            : {}
+        headers
       },
       (res) => {
         let raw = '';
@@ -56,17 +60,61 @@ function request(urlPath, { method = 'GET', body = null } = {}) {
   });
 }
 
-async function waitForServerReady() {
+function request(urlPath, opts = {}) {
+  return requestUrl(BASE_URL, urlPath, opts);
+}
+
+function extractCookiePair(setCookieHeaders) {
+  const list = Array.isArray(setCookieHeaders)
+    ? setCookieHeaders
+    : setCookieHeaders
+      ? [setCookieHeaders]
+      : [];
+  const match = list.find((item) => item.startsWith('gridtube_session='));
+  return match ? match.split(';')[0] : '';
+}
+
+async function loginAs(baseUrl, username, password) {
+  const res = await requestUrl(baseUrl, '/api/auth/login', {
+    method: 'POST',
+    body: { username, password }
+  });
+  return { res, cookie: extractCookiePair(res.headers['set-cookie']) };
+}
+
+async function startServer(port, dataDir) {
+  const baseUrl = `http://127.0.0.1:${port}`;
+  let logs = '';
+  const proc = spawn(process.execPath, [BUILD_ENTRY], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, PORT: String(port), DATA_DIR: dataDir },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  proc.stdout.on('data', (chunk) => {
+    logs += chunk.toString();
+  });
+  proc.stderr.on('data', (chunk) => {
+    logs += chunk.toString();
+  });
+
   for (let attempt = 0; attempt < 50; attempt++) {
     try {
-      const res = await request('/api/health');
-      if (res.status === 200) return;
+      const res = await requestUrl(baseUrl, '/api/health');
+      if (res.status === 200) {
+        const pwMatch = /GRIDTUBE INITIAL ADMIN ACCOUNT CREATED[\s\S]*?Password\s*:\s*([A-Za-z0-9]+)/.exec(
+          logs
+        );
+        return { proc, baseUrl, initialAdminPassword: pwMatch?.[1] ?? null, getLogs: () => logs };
+      }
     } catch {
-      // Wait for server startup + PGlite migration
+      // Wait for server startup + migrations
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  throw new Error('Server failed to become ready within 5 seconds');
+
+  await stopProcess(proc);
+  throw new Error(`Server failed to become ready on ${baseUrl}. Logs:\n${logs}`);
 }
 
 function stopProcess(proc) {
@@ -88,16 +136,24 @@ function stopProcess(proc) {
   });
 }
 
-describe('GridTube SvelteKit + Drizzle (PGlite) Smoke Suite', () => {
+describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
   before(async () => {
     assert.ok(fs.existsSync(BUILD_ENTRY), 'Run "npm run build" before running smoke tests');
     tmpDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gridtube-smoke-'));
-    serverProc = spawn(process.execPath, [BUILD_ENTRY], {
-      cwd: REPO_ROOT,
-      env: { ...process.env, PORT: String(PORT), DATA_DIR: tmpDataDir },
-      stdio: 'ignore'
-    });
-    await waitForServerReady();
+    const started = await startServer(PORT, tmpDataDir);
+    serverProc = started.proc;
+    adminInitialPassword = started.initialAdminPassword;
+    assert.ok(adminInitialPassword, 'Initial admin password banner must be printed on first boot');
+
+    const { res, cookie } = await loginAs(BASE_URL, 'admin', adminInitialPassword);
+    assert.equal(res.status, 200);
+    assert.equal(res.json.user.username, 'admin');
+    assert.equal(res.json.user.role, 'admin');
+    assert.ok(cookie.startsWith('gridtube_session='));
+    const setCookieHeader = String(res.headers['set-cookie']);
+    assert.match(setCookieHeader, /HttpOnly/i);
+    assert.match(setCookieHeader, /Max-Age=604800/i);
+    adminCookie = cookie;
   });
 
   after(async () => {
@@ -107,7 +163,7 @@ describe('GridTube SvelteKit + Drizzle (PGlite) Smoke Suite', () => {
     }
   });
 
-  it('runs migrations cleanly on PGlite and exposes health & version', async () => {
+  it('keeps health and version unauthenticated while protecting app and grid APIs', async () => {
     const health = await request('/api/health');
     assert.equal(health.status, 200);
     assert.equal(health.json.status, 'ok');
@@ -116,36 +172,52 @@ describe('GridTube SvelteKit + Drizzle (PGlite) Smoke Suite', () => {
     const version = await request('/api/version');
     assert.equal(version.status, 200);
     assert.ok(typeof version.json.version === 'string' && version.json.version.length > 0);
+
+    const anonGrids = await request('/api/grids');
+    assert.equal(anonGrids.status, 401);
+
+    const anonLanding = await request('/');
+    assert.equal(anonLanding.status, 200);
+    assert.match(anonLanding.raw, /id="login-form"/);
+    assert.doesNotMatch(anonLanding.raw, /choo-choos/);
+
+    const anonDeepLink = await request('/grid/choo-choos');
+    assert.equal(anonDeepLink.status, 302);
+    assert.equal(anonDeepLink.headers.location, '/?next=%2Fgrid%2Fchoo-choos');
   });
 
-  it('serves SSR pages and redirects unknown grid IDs to /', async () => {
-    const landing = await request('/');
+  it('serves authenticated SSR pages and redirects unknown grid IDs to /', async () => {
+    const landing = await request('/', { cookie: adminCookie });
     assert.equal(landing.status, 200);
     assert.match(landing.raw, /GridTube/);
     assert.match(landing.raw, /choo-choos/);
+    assert.match(landing.raw, /href="\/admin"/);
+    assert.match(landing.raw, /href="\/profile"/);
 
-    const player = await request('/grid/choo-choos');
+    const player = await request('/grid/choo-choos', { cookie: adminCookie });
     assert.equal(player.status, 200);
     assert.match(player.raw, /choo-choos/);
 
-    const missing = await request('/grid/does-not-exist');
+    const missing = await request('/grid/does-not-exist', { cookie: adminCookie });
     assert.equal(missing.status, 302);
     assert.equal(missing.headers.location, '/');
   });
 
   it('supports create, read, update, and delete on /api/grids with validation', async () => {
-    const initial = await request('/api/grids');
+    const initial = await request('/api/grids', { cookie: adminCookie });
     assert.equal(initial.status, 200);
     assert.ok(Array.isArray(initial.json) && initial.json.length === 1);
 
     const bad = await request('/api/grids', {
       method: 'POST',
+      cookie: adminCookie,
       body: { name: 'Bad Feed', feeds: ['https://example.com/not-youtube'] }
     });
     assert.equal(bad.status, 400);
 
     const created = await request('/api/grids', {
       method: 'POST',
+      cookie: adminCookie,
       body: {
         name: 'CI Test Grid',
         feeds: [{ url: 'https://www.youtube.com/watch?v=4XYbh4Pegzw', volume: 55, muted: false }]
@@ -156,6 +228,7 @@ describe('GridTube SvelteKit + Drizzle (PGlite) Smoke Suite', () => {
 
     const updated = await request(`/api/grids/${encodeURIComponent(created.json.id)}`, {
       method: 'PUT',
+      cookie: adminCookie,
       body: {
         name: 'CI Test Grid Updated',
         feeds: [{ url: 'https://www.youtube.com/watch?v=4XYbh4Pegzw', volume: 22, muted: true }]
@@ -166,17 +239,139 @@ describe('GridTube SvelteKit + Drizzle (PGlite) Smoke Suite', () => {
     assert.equal(updated.json.feeds[0].muted, true);
 
     const deleted = await request(`/api/grids/${encodeURIComponent(created.json.id)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      cookie: adminCookie
     });
     assert.equal(deleted.status, 200);
 
     const missing = await request(`/api/grids/${encodeURIComponent(created.json.id)}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      cookie: adminCookie
     });
     assert.equal(missing.status, 404);
   });
 
-  it('imports legacy DATA_DIR/grids.json on first boot when table is empty', async () => {
+  it('enforces admin RBAC, user CRUD, grid privacy, profile updates, and logout', async () => {
+    // Reject short passwords (<12 chars), accept 12+ lowercase-only passwords
+    const tooShort = await request('/api/users', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { username: 'Alice', password: 'shortpass', role: 'user' }
+    });
+    assert.equal(tooShort.status, 400);
+
+    const createdUser = await request('/api/users', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { username: 'Alice', password: 'alllowercase', role: 'user' }
+    });
+    assert.equal(createdUser.status, 201);
+    const aliceId = createdUser.json.user.id;
+    assert.ok(aliceId);
+
+    // Case-insensitive username uniqueness
+    const dupCase = await request('/api/users', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { username: '  alice ', password: 'anotherpassword', role: 'user' }
+    });
+    assert.equal(dupCase.status, 409);
+
+    // Admin list excludes self ('admin')
+    const userList = await request('/api/users', { cookie: adminCookie });
+    assert.equal(userList.status, 200);
+    assert.equal(userList.json.users.length, 1);
+    assert.equal(userList.json.users[0].username, 'Alice');
+
+    // Login as Alice (case-insensitive username)
+    const { res: aliceLogin, cookie: aliceCookie } = await loginAs(
+      BASE_URL,
+      'alice',
+      'alllowercase'
+    );
+    assert.equal(aliceLogin.status, 200);
+    assert.equal(aliceLogin.json.user.role, 'user');
+
+    // Non-admin blocked from /api/users and /admin, and grids are strictly private
+    const forbiddenApi = await request('/api/users', { cookie: aliceCookie });
+    assert.equal(forbiddenApi.status, 403);
+    const forbiddenPage = await request('/admin', { cookie: aliceCookie });
+    assert.equal(forbiddenPage.status, 302);
+    assert.equal(forbiddenPage.headers.location, '/');
+
+    const aliceGridsEmpty = await request('/api/grids', { cookie: aliceCookie });
+    assert.equal(aliceGridsEmpty.status, 200);
+    assert.equal(aliceGridsEmpty.json.length, 0);
+
+    const adminGridByAlice = await request('/api/grids/choo-choos', { cookie: aliceCookie });
+    assert.equal(adminGridByAlice.status, 404);
+
+    const aliceCreatedGrid = await request('/api/grids', {
+      method: 'POST',
+      cookie: aliceCookie,
+      body: {
+        name: 'Alice Grid',
+        feeds: [{ url: 'https://www.youtube.com/watch?v=4XYbh4Pegzw', volume: 80, muted: false }]
+      }
+    });
+    assert.equal(aliceCreatedGrid.status, 201);
+
+    // Profile: wrong current password rejected, valid update works
+    const badProfilePw = await request('/api/profile', {
+      method: 'PUT',
+      cookie: aliceCookie,
+      body: { currentPassword: 'wrongpassword', newPassword: 'newlowercasepw' }
+    });
+    assert.equal(badProfilePw.status, 403);
+
+    const okProfile = await request('/api/profile', {
+      method: 'PUT',
+      cookie: aliceCookie,
+      body: {
+        username: 'AliceRenamed',
+        currentPassword: 'alllowercase',
+        newPassword: 'newlowercasepw'
+      }
+    });
+    assert.equal(okProfile.status, 200);
+    assert.equal(okProfile.json.user.username, 'AliceRenamed');
+
+    // Admin edits Alice's role/password without needing current password -> revokes Alice's session
+    const adminEdit = await request(`/api/users/${encodeURIComponent(aliceId)}`, {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: { username: 'AlicePromoted', role: 'admin', password: 'adminresetpw12' }
+    });
+    assert.equal(adminEdit.status, 200);
+    assert.equal(adminEdit.json.user.role, 'admin');
+
+    const revokedAfterEdit = await request('/api/grids', { cookie: aliceCookie });
+    assert.equal(revokedAfterEdit.status, 401);
+
+    // Login with admin-reset password works
+    const { res: relogin, cookie: promotedCookie } = await loginAs(
+      BASE_URL,
+      'AlicePromoted',
+      'adminresetpw12'
+    );
+    assert.equal(relogin.status, 200);
+    assert.equal(relogin.json.user.role, 'admin');
+
+    // Logout invalidates token
+    const logout = await request('/api/auth/logout', { method: 'POST', cookie: promotedCookie });
+    assert.equal(logout.status, 200);
+    const afterLogout = await request('/api/grids', { cookie: promotedCookie });
+    assert.equal(afterLogout.status, 401);
+
+    // Admin deletes AlicePromoted -> cascades her grids too
+    const delUser = await request(`/api/users/${encodeURIComponent(aliceId)}`, {
+      method: 'DELETE',
+      cookie: adminCookie
+    });
+    assert.equal(delUser.status, 200);
+  });
+
+  it('imports legacy DATA_DIR/grids.json on first boot and assigns to initial admin', async () => {
     const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gridtube-legacy-test-'));
     const legacyPort = PORT + 1;
     fs.writeFileSync(
@@ -191,50 +386,28 @@ describe('GridTube SvelteKit + Drizzle (PGlite) Smoke Suite', () => {
       ])
     );
 
-    const legacyProc = spawn(process.execPath, [BUILD_ENTRY], {
-      cwd: REPO_ROOT,
-      env: { ...process.env, PORT: String(legacyPort), DATA_DIR: legacyDir },
-      stdio: 'ignore'
-    });
-
+    const started = await startServer(legacyPort, legacyDir);
     try {
-      for (let i = 0; i < 50; i++) {
-        try {
-          const ok = await new Promise((resolve) => {
-            http
-              .get(`http://127.0.0.1:${legacyPort}/api/health`, { agent: false }, (res) => {
-                res.resume();
-                resolve(res.statusCode === 200);
-              })
-              .on('error', () => resolve(false));
-          });
-          if (ok) break;
-        } catch {
-          // Wait
-        }
-        await new Promise((r) => setTimeout(r, 100));
-      }
+      assert.ok(started.initialAdminPassword);
+      const { res: loginRes, cookie } = await loginAs(
+        started.baseUrl,
+        'admin',
+        started.initialAdminPassword
+      );
+      assert.equal(loginRes.status, 200);
 
-      const grids = await new Promise((resolve, reject) => {
-        http
-          .get(`http://127.0.0.1:${legacyPort}/api/grids`, { agent: false }, (res) => {
-            let raw = '';
-            res.on('data', (c) => (raw += c));
-            res.on('end', () => resolve(JSON.parse(raw)));
-          })
-          .on('error', reject);
-      });
-
-      assert.equal(grids.length, 1);
-      assert.equal(grids[0].id, 'legacy-import-1');
-      assert.equal(grids[0].feeds[0].volume, 33);
+      const grids = await requestUrl(started.baseUrl, '/api/grids', { cookie });
+      assert.equal(grids.status, 200);
+      assert.equal(grids.json.length, 1);
+      assert.equal(grids.json[0].id, 'legacy-import-1');
+      assert.equal(grids.json[0].feeds[0].volume, 33);
     } finally {
-      await stopProcess(legacyProc);
+      await stopProcess(started.proc);
       fs.rmSync(legacyDir, { recursive: true, force: true });
     }
   });
 
-  it('migrates 0000 grids.feeds JSONB into grid_urls and cascades deletes', async () => {
+  it('migrates 0000 -> 0002 (grids.feeds JSONB -> grid_urls + users ownership) cleanly', async () => {
     const upgradeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gridtube-upgrade-test-'));
     const tmpMigrationsDir = path.join(upgradeDir, 'migrations0000');
     const upgradePort = PORT + 2;
@@ -275,38 +448,20 @@ describe('GridTube SvelteKit + Drizzle (PGlite) Smoke Suite', () => {
     );
     await pgInitial.close();
 
-    const upgradeProc = spawn(process.execPath, [BUILD_ENTRY], {
-      cwd: REPO_ROOT,
-      env: { ...process.env, PORT: String(upgradePort), DATA_DIR: upgradeDir },
-      stdio: 'ignore'
-    });
-
+    const started = await startServer(upgradePort, upgradeDir);
     try {
-      for (let i = 0; i < 50; i++) {
-        const ok = await new Promise((resolve) => {
-          http
-            .get(`http://127.0.0.1:${upgradePort}/api/health`, { agent: false }, (res) => {
-              res.resume();
-              resolve(res.statusCode === 200);
-            })
-            .on('error', () => resolve(false));
-        });
-        if (ok) break;
-        await new Promise((r) => setTimeout(r, 100));
-      }
+      assert.ok(started.initialAdminPassword);
+      const { res: loginRes, cookie } = await loginAs(
+        started.baseUrl,
+        'admin',
+        started.initialAdminPassword
+      );
+      assert.equal(loginRes.status, 200);
 
-      const grids = await new Promise((resolve, reject) => {
-        http
-          .get(`http://127.0.0.1:${upgradePort}/api/grids`, { agent: false }, (res) => {
-            let raw = '';
-            res.on('data', (c) => (raw += c));
-            res.on('end', () => resolve(JSON.parse(raw)));
-          })
-          .on('error', reject);
-      });
-
-      assert.equal(grids.length, 2);
-      const first = grids.find((g) => g.id === 'upgrade-grid-1');
+      const grids = await requestUrl(started.baseUrl, '/api/grids', { cookie });
+      assert.equal(grids.status, 200);
+      assert.equal(grids.json.length, 2);
+      const first = grids.json.find((g) => g.id === 'upgrade-grid-1');
       assert.ok(first);
       assert.equal(first.feeds.length, 4);
       assert.deepEqual(first.feeds[1], {
@@ -316,32 +471,20 @@ describe('GridTube SvelteKit + Drizzle (PGlite) Smoke Suite', () => {
       });
       assert.equal(first.feeds[2].volume, 25);
 
-      // Delete upgrade-grid-2 via API and confirm grid_urls cascades
-      const delStatus = await new Promise((resolve, reject) => {
-        const req = http.request(
-          `http://127.0.0.1:${upgradePort}/api/grids/upgrade-grid-2`,
-          {
-            method: 'DELETE',
-            agent: false,
-            headers: { 'Content-Type': 'application/json' }
-          },
-          (res) => {
-            res.resume();
-            res.on('end', () => resolve(res.statusCode));
-          }
-        );
-        req.on('error', reject);
-        req.end();
+      const del = await requestUrl(started.baseUrl, '/api/grids/upgrade-grid-2', {
+        method: 'DELETE',
+        cookie
       });
-      assert.equal(delStatus, 200);
+      assert.equal(del.status, 200);
 
-      await stopProcess(upgradeProc);
+      await stopProcess(started.proc);
 
       const pgAfter = new PGlite(pgDataPath);
-      const feedsCol = await pgAfter.query(
-        `SELECT column_name FROM information_schema.columns WHERE table_name = 'grids' AND column_name = 'feeds'`
+      const userIdCol = await pgAfter.query(
+        `SELECT is_nullable FROM information_schema.columns WHERE table_name = 'grids' AND column_name = 'user_id'`
       );
-      assert.equal(feedsCol.rows.length, 0);
+      assert.equal(userIdCol.rows.length, 1);
+      assert.equal(userIdCol.rows[0].is_nullable, 'NO');
 
       const urlRows = await pgAfter.query(
         `SELECT grid_id, slot, url, volume, muted FROM grid_urls ORDER BY grid_id, slot`
@@ -358,7 +501,7 @@ describe('GridTube SvelteKit + Drizzle (PGlite) Smoke Suite', () => {
       );
       await pgAfter.close();
     } finally {
-      await stopProcess(upgradeProc);
+      await stopProcess(started.proc);
       fs.rmSync(upgradeDir, { recursive: true, force: true });
     }
   });

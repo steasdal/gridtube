@@ -1,8 +1,10 @@
 <script lang="ts">
-  import { goto } from '$app/navigation';
+  import { goto, invalidateAll } from '$app/navigation';
   import { onMount } from 'svelte';
+  import { logoutApi } from '$lib/client/api';
   import DeleteConfirmModal from '$lib/components/DeleteConfirmModal.svelte';
   import GridFormModal from '$lib/components/GridFormModal.svelte';
+  import LoginView from '$lib/components/LoginView.svelte';
   import type { Grid } from '$lib/types';
   import { buildThumbnailUrl } from '$lib/youtube';
   import type { PageData } from './$types';
@@ -12,8 +14,21 @@
   let grids = $state<Grid[]>([]);
   let statusMessage = $state('');
   let statusTimer: ReturnType<typeof setTimeout> | null = null;
+  let loggingOut = $state(false);
   let formModal: GridFormModal | undefined = $state();
   let deleteModal: DeleteConfirmModal | undefined = $state();
+
+  async function handleLogout() {
+    loggingOut = true;
+    try {
+      await logoutApi();
+      await invalidateAll();
+    } catch (err) {
+      showStatusBanner(err instanceof Error ? err.message : 'Unable to log out.');
+    } finally {
+      loggingOut = false;
+    }
+  }
 
   $effect(() => {
     grids = data.grids;
@@ -72,6 +87,9 @@
   <title>GridTube — 2×2 YouTube Live Stream Wall</title>
 </svelte:head>
 
+{#if !data.user}
+  <LoginView redirectTo={data.redirectTo} version={data.version} />
+{:else}
 <section id="landing-view" class="landing-view" aria-labelledby="landing-heading">
   <header class="site-header">
     <div class="brand-group">
@@ -90,6 +108,21 @@
     </div>
 
     <div class="header-actions">
+      <a href="/profile" id="nav-profile-link" class="btn btn-secondary">
+        Profile ({data.user.username})
+      </a>
+      {#if data.user.role === 'admin'}
+        <a href="/admin" id="nav-admin-link" class="btn btn-secondary">Administration</a>
+      {/if}
+      <button
+        type="button"
+        id="logout-btn"
+        class="btn btn-secondary"
+        disabled={loggingOut}
+        onclick={handleLogout}
+      >
+        {loggingOut ? 'Logging out...' : 'Log Out'}
+      </button>
       <button
         type="button"
         id="new-grid-btn"
@@ -262,3 +295,4 @@
 
 <GridFormModal bind:this={formModal} onSaved={handleSaved} />
 <DeleteConfirmModal bind:this={deleteModal} onDeleted={handleDeleted} />
+{/if}

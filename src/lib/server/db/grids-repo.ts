@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { FeedEntry, Grid } from '$lib/types';
 import { normalizeFeedEntry, normalizeFeedsList } from '$lib/youtube';
 import { getDb } from './index';
@@ -26,6 +26,7 @@ function assembleGrid(row: GridRow, urlRows: GridUrlRow[]): Grid {
 
   return {
     id: row.id,
+    userId: row.userId,
     name: row.name,
     feeds,
     createdAt: row.createdAt,
@@ -33,12 +34,22 @@ function assembleGrid(row: GridRow, urlRows: GridUrlRow[]): Grid {
   };
 }
 
-export async function listGrids(): Promise<Grid[]> {
+export async function listGrids(userId: string): Promise<Grid[]> {
   const db = await getDb();
-  const [gridRows, allUrlRows] = await Promise.all([
-    db.select().from(grids).orderBy(asc(grids.createdAt), asc(grids.id)),
-    db.select().from(gridUrls).orderBy(asc(gridUrls.slot))
-  ]);
+  const gridRows = await db
+    .select()
+    .from(grids)
+    .where(eq(grids.userId, userId))
+    .orderBy(asc(grids.createdAt), asc(grids.id));
+
+  if (gridRows.length === 0) return [];
+
+  const gridIds = gridRows.map((row) => row.id);
+  const allUrlRows = await db
+    .select()
+    .from(gridUrls)
+    .where(inArray(gridUrls.gridId, gridIds))
+    .orderBy(asc(gridUrls.slot));
 
   const urlsByGridId = new Map<string, GridUrlRow[]>();
   for (const urlRow of allUrlRows) {
@@ -53,9 +64,13 @@ export async function listGrids(): Promise<Grid[]> {
   return gridRows.map((row) => assembleGrid(row, urlsByGridId.get(row.id) ?? []));
 }
 
-export async function getGridById(id: string): Promise<Grid | null> {
+export async function getGridById(id: string, userId: string): Promise<Grid | null> {
   const db = await getDb();
-  const [row] = await db.select().from(grids).where(eq(grids.id, id)).limit(1);
+  const [row] = await db
+    .select()
+    .from(grids)
+    .where(and(eq(grids.id, id), eq(grids.userId, userId)))
+    .limit(1);
   if (!row) return null;
 
   const urlRows = await db
@@ -67,7 +82,7 @@ export async function getGridById(id: string): Promise<Grid | null> {
   return assembleGrid(row, urlRows);
 }
 
-export async function createGrid(name: string, feeds: FeedEntry[]): Promise<Grid> {
+export async function createGrid(userId: string, name: string, feeds: FeedEntry[]): Promise<Grid> {
   const db = await getDb();
   const gridId = crypto.randomUUID();
   const normalized = normalizeFeedsList(feeds);
@@ -77,6 +92,7 @@ export async function createGrid(name: string, feeds: FeedEntry[]): Promise<Grid
       .insert(grids)
       .values({
         id: gridId,
+        userId,
         name,
         createdAt: new Date().toISOString()
       })
@@ -104,6 +120,7 @@ export async function createGrid(name: string, feeds: FeedEntry[]): Promise<Grid
 
 export async function updateGrid(
   id: string,
+  userId: string,
   name: string,
   feeds: FeedEntry[]
 ): Promise<Grid | null> {
@@ -117,7 +134,7 @@ export async function updateGrid(
         name,
         updatedAt: new Date().toISOString()
       })
-      .where(eq(grids.id, id))
+      .where(and(eq(grids.id, id), eq(grids.userId, userId)))
       .returning();
 
     if (!updatedGrid) return null;
@@ -150,8 +167,11 @@ export async function updateGrid(
   return result ? assembleGrid(result.updatedGrid, result.upsertedUrls) : null;
 }
 
-export async function deleteGrid(id: string): Promise<boolean> {
+export async function deleteGrid(id: string, userId: string): Promise<boolean> {
   const db = await getDb();
-  const deleted = await db.delete(grids).where(eq(grids.id, id)).returning({ id: grids.id });
+  const deleted = await db
+    .delete(grids)
+    .where(and(eq(grids.id, id), eq(grids.userId, userId)))
+    .returning({ id: grids.id });
   return deleted.length > 0;
 }
