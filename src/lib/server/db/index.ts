@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
@@ -54,6 +55,39 @@ interface DbContext {
 
 let dbContextPromise: Promise<DbContext> | null = null;
 
+async function insertGridsWithUrls(db: AppDatabase, items: Grid[]): Promise<void> {
+  if (items.length === 0) return;
+
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(schema.grids)
+      .values(
+        items.map((grid) => ({
+          id: grid.id,
+          name: grid.name,
+          createdAt: grid.createdAt,
+          updatedAt: grid.updatedAt ?? null
+        }))
+      )
+      .onConflictDoNothing();
+
+    const urlRows = items.flatMap((grid) =>
+      normalizeFeedsList(grid.feeds).map((feed, slot) => ({
+        id: crypto.randomUUID(),
+        gridId: grid.id,
+        slot,
+        url: feed.url,
+        volume: feed.volume,
+        muted: feed.muted
+      }))
+    );
+
+    if (urlRows.length > 0) {
+      await tx.insert(schema.gridUrls).values(urlRows).onConflictDoNothing();
+    }
+  });
+}
+
 async function seedOrImportInitialGrids(db: AppDatabase, dataDir: string): Promise<void> {
   const [{ value: existingCount }] = await db.select({ value: count() }).from(schema.grids);
   if (existingCount > 0) return;
@@ -64,7 +98,7 @@ async function seedOrImportInitialGrids(db: AppDatabase, dataDir: string): Promi
       const raw = await fs.readFile(legacyFile, 'utf8');
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        const rows = parsed
+        const items: Grid[] = parsed
           .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
           .map((item) => ({
             id: typeof item.id === 'string' && item.id.trim() ? item.id.trim() : crypto.randomUUID(),
@@ -76,9 +110,9 @@ async function seedOrImportInitialGrids(db: AppDatabase, dataDir: string): Promi
                 : new Date().toISOString(),
             updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : null
           }));
-        if (rows.length > 0) {
-          await db.insert(schema.grids).values(rows).onConflictDoNothing();
-          console.info(`Imported ${rows.length} grid(s) from legacy ${legacyFile}`);
+        if (items.length > 0) {
+          await insertGridsWithUrls(db, items);
+          console.info(`Imported ${items.length} grid(s) from legacy ${legacyFile}`);
         }
       }
       return;
@@ -87,18 +121,7 @@ async function seedOrImportInitialGrids(db: AppDatabase, dataDir: string): Promi
     }
   }
 
-  await db
-    .insert(schema.grids)
-    .values(
-      DEFAULT_GRIDS.map((grid) => ({
-        id: grid.id,
-        name: grid.name,
-        feeds: normalizeFeedsList(grid.feeds),
-        createdAt: grid.createdAt,
-        updatedAt: null
-      }))
-    )
-    .onConflictDoNothing();
+  await insertGridsWithUrls(db, DEFAULT_GRIDS);
 }
 
 async function createDbContext(): Promise<DbContext> {

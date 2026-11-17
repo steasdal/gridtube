@@ -1,15 +1,33 @@
 import crypto from 'node:crypto';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, sql } from 'drizzle-orm';
 import type { FeedEntry, Grid } from '$lib/types';
-import { normalizeFeedsList } from '$lib/youtube';
+import { normalizeFeedEntry, normalizeFeedsList } from '$lib/youtube';
 import { getDb } from './index';
-import { grids, type GridRow } from './schema';
+import { grids, gridUrls, type GridRow, type GridUrlRow } from './schema';
 
-function mapRowToGrid(row: GridRow): Grid {
+function assembleGrid(row: GridRow, urlRows: GridUrlRow[]): Grid {
+  const slotMap = new Map<number, FeedEntry>();
+  for (const urlRow of urlRows) {
+    if (urlRow.slot >= 0 && urlRow.slot < 4) {
+      slotMap.set(
+        urlRow.slot,
+        normalizeFeedEntry({
+          url: urlRow.url,
+          volume: urlRow.volume,
+          muted: urlRow.muted
+        })
+      );
+    }
+  }
+
+  const feeds: FeedEntry[] = [0, 1, 2, 3].map(
+    (slot) => slotMap.get(slot) ?? { url: '', volume: 100, muted: false }
+  );
+
   return {
     id: row.id,
     name: row.name,
-    feeds: normalizeFeedsList(row.feeds),
+    feeds,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt ?? undefined
   };
@@ -17,28 +35,71 @@ function mapRowToGrid(row: GridRow): Grid {
 
 export async function listGrids(): Promise<Grid[]> {
   const db = await getDb();
-  const rows = await db.select().from(grids).orderBy(asc(grids.createdAt), asc(grids.id));
-  return rows.map(mapRowToGrid);
+  const [gridRows, allUrlRows] = await Promise.all([
+    db.select().from(grids).orderBy(asc(grids.createdAt), asc(grids.id)),
+    db.select().from(gridUrls).orderBy(asc(gridUrls.slot))
+  ]);
+
+  const urlsByGridId = new Map<string, GridUrlRow[]>();
+  for (const urlRow of allUrlRows) {
+    let bucket = urlsByGridId.get(urlRow.gridId);
+    if (!bucket) {
+      bucket = [];
+      urlsByGridId.set(urlRow.gridId, bucket);
+    }
+    bucket.push(urlRow);
+  }
+
+  return gridRows.map((row) => assembleGrid(row, urlsByGridId.get(row.id) ?? []));
 }
 
 export async function getGridById(id: string): Promise<Grid | null> {
   const db = await getDb();
   const [row] = await db.select().from(grids).where(eq(grids.id, id)).limit(1);
-  return row ? mapRowToGrid(row) : null;
+  if (!row) return null;
+
+  const urlRows = await db
+    .select()
+    .from(gridUrls)
+    .where(eq(gridUrls.gridId, id))
+    .orderBy(asc(gridUrls.slot));
+
+  return assembleGrid(row, urlRows);
 }
 
 export async function createGrid(name: string, feeds: FeedEntry[]): Promise<Grid> {
   const db = await getDb();
-  const [inserted] = await db
-    .insert(grids)
-    .values({
-      id: crypto.randomUUID(),
-      name,
-      feeds: normalizeFeedsList(feeds),
-      createdAt: new Date().toISOString()
-    })
-    .returning();
-  return mapRowToGrid(inserted);
+  const gridId = crypto.randomUUID();
+  const normalized = normalizeFeedsList(feeds);
+
+  const { insertedGrid, insertedUrls } = await db.transaction(async (tx) => {
+    const [gridRow] = await tx
+      .insert(grids)
+      .values({
+        id: gridId,
+        name,
+        createdAt: new Date().toISOString()
+      })
+      .returning();
+
+    const urlRows = await tx
+      .insert(gridUrls)
+      .values(
+        normalized.map((feed, slot) => ({
+          id: crypto.randomUUID(),
+          gridId,
+          slot,
+          url: feed.url,
+          volume: feed.volume,
+          muted: feed.muted
+        }))
+      )
+      .returning();
+
+    return { insertedGrid: gridRow, insertedUrls: urlRows };
+  });
+
+  return assembleGrid(insertedGrid, insertedUrls);
 }
 
 export async function updateGrid(
@@ -47,16 +108,46 @@ export async function updateGrid(
   feeds: FeedEntry[]
 ): Promise<Grid | null> {
   const db = await getDb();
-  const [updated] = await db
-    .update(grids)
-    .set({
-      name,
-      feeds: normalizeFeedsList(feeds),
-      updatedAt: new Date().toISOString()
-    })
-    .where(eq(grids.id, id))
-    .returning();
-  return updated ? mapRowToGrid(updated) : null;
+  const normalized = normalizeFeedsList(feeds);
+
+  const result = await db.transaction(async (tx) => {
+    const [updatedGrid] = await tx
+      .update(grids)
+      .set({
+        name,
+        updatedAt: new Date().toISOString()
+      })
+      .where(eq(grids.id, id))
+      .returning();
+
+    if (!updatedGrid) return null;
+
+    const upsertedUrls = await tx
+      .insert(gridUrls)
+      .values(
+        normalized.map((feed, slot) => ({
+          id: crypto.randomUUID(),
+          gridId: id,
+          slot,
+          url: feed.url,
+          volume: feed.volume,
+          muted: feed.muted
+        }))
+      )
+      .onConflictDoUpdate({
+        target: [gridUrls.gridId, gridUrls.slot],
+        set: {
+          url: sql`excluded.url`,
+          volume: sql`excluded.volume`,
+          muted: sql`excluded.muted`
+        }
+      })
+      .returning();
+
+    return { updatedGrid, upsertedUrls };
+  });
+
+  return result ? assembleGrid(result.updatedGrid, result.upsertedUrls) : null;
 }
 
 export async function deleteGrid(id: string): Promise<boolean> {
