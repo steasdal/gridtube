@@ -1,126 +1,130 @@
 # GridTube
 
-A modern, self-hosted Single Page Application (SPA) for streaming up to four YouTube live feeds simultaneously in a full-viewport 2×2 grid with zero wasted screen space.
+A self-hosted TypeScript web application built with **SvelteKit** and **Drizzle ORM** for streaming up to four YouTube live feeds simultaneously in a full-viewport 2×2 grid.
 
 ## Features
 
-- **100% Viewport 2×2 Video Wall**: In grid view, the four stream panes occupy `100% × 100dvh` with a tucked top-left `Menu ▾` hover drawer that stays out of the way of YouTube's built-in player controls.
-- **Per-Feed Audio Controls**: Configure a default Mute/Unmute state and `0–100%` volume level for each of the four panes in the Add/Edit dialog, applied automatically via the YouTube IFrame API on grid load and updated live when edited from within a playing grid.
-- **Partial Grid Support**: Any of the 4 feed URLs can be left blank; unconfigured slots render a clean empty box with a one-click button to add a feed URL later.
-- **Persistent Volume Storage**: Saved grids are stored atomically as JSON in `DATA_DIR` (`/data/grids.json` by default in Docker/Kubernetes).
-- **Pre-seeded Example**: Automatically seeds the `choo-choos` railroad crossing grid on first start if `grids.json` does not exist yet.
+- **100% Viewport 2×2 Video Wall**: In grid view, the four stream panes occupy `100% × 100%` of the viewport with a tucked top-left `Menu ▾` drawer that stays clear of YouTube's built-in controls (plus `f` key fullscreen toggle and iPadOS/iOS mobile support).
+- **Per-Feed Audio & Live Persistence**: Configure Mute/Unmute and `0–100%` volume per pane in the Add/Edit dialog, applied via the YouTube IFrame API; desktop player volume and mute adjustments automatically save back to the grid configuration.
+- **Partial Grid Support**: Any of the 4 feed slots can be left blank and configured later directly from the empty pane.
+- **PostgreSQL + Embedded PGlite Storage**: Uses external PostgreSQL when `DATABASE_URL` is provided, or embedded **`PGlite`** persisted inside `DATA_DIR` (`/data/pgdata`) with zero external database setup required.
+- **Automatic Startup Migrations & Legacy Import**: Runs Drizzle SQL migrations (`./drizzle`) automatically when the server boots, imports existing `$DATA_DIR/grids.json` data on first upgrade if present, and otherwise seeds the example `choo-choos` grid.
 
 ---
 
-## Quick Start
+## Local Development & Quick Start
 
-### 1. Local Node.js
+### Prerequisites
+
+- **Node.js >= 20** (and npm)
+- Optional: **PostgreSQL** instance if you prefer external Postgres instead of embedded `PGlite`
+- Optional: **Docker** for container builds
+
+### 1. Run Locally with Embedded PGlite (Zero External DB Setup)
 
 ```bash
-node server.js
+# Install dependencies
+npm install
+
+# Start SvelteKit dev server on http://localhost:8080
+# Database migrations run automatically on startup into ./data/pgdata
+npm run dev
+```
+
+Or run the compiled production Node server locally:
+
+```bash
+npm run build
+PORT=8080 DATA_DIR=./data npm start
 # Open http://localhost:8080
 ```
 
-### 2. Docker & Docker Compose
+### 2. Run Locally Against PostgreSQL (via Docker Compose)
+
+[docker-compose.yml](docker-compose.yml) includes a `postgres` service wired to `gridtube`. To develop locally with Vite against that Postgres container:
 
 ```bash
-# Pull and start from GitHub Container Registry with a local ./data volume mounted to /data
-docker compose up -d
+# Start only PostgreSQL on 127.0.0.1:5432
+docker compose up -d postgres
 
-# Or run the develop tag:
+# Connect the SvelteKit dev server to it (migrations run automatically on startup)
+DATABASE_URL="postgres://gridtube:gridtube@127.0.0.1:5432/gridtube" npm run dev
+```
+
+### 3. Typecheck, Tests & Migrations
+
+```bash
+# Run svelte-check + TypeScript validation
+npm run check
+
+# Build production Node bundle and run the API + PGlite smoke suite
+npm run build
+npm test
+
+# Generate new Drizzle SQL migrations after editing src/lib/server/db/schema.ts
+npm run db:generate
+```
+
+### 4. Full Stack with Docker & Docker Compose (`gridtube` + `postgres`)
+
+```bash
+# Build and start both GridTube and PostgreSQL wired together
+docker compose up --build -d
+
+# Or pull and run the published develop/release image with PostgreSQL
 IMAGE_TAG=develop docker compose up -d
 
-# Or with docker run directly:
+# Or run standalone with docker run + embedded PGlite (no external Postgres)
 docker run -d --name gridtube -p 8080:8080 -v "$(pwd)/data:/data" ghcr.io/steasdal/gridtube:latest
 ```
 
 ---
 
+## Environment Variables
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `PORT` | `3000` (`8080` in Docker/K8s) | HTTP port for the Node server |
+| `DATA_DIR` | `./data` (`/data` in Docker/K8s) | Directory for embedded `PGlite` (`pgdata/`) and legacy `grids.json` import |
+| `DATABASE_URL` | *Unset* | PostgreSQL connection string; when unset, embedded `PGlite` is used |
+| `MIGRATIONS_DIR` | `./drizzle` | Path to Drizzle SQL migrations executed automatically on startup |
+
+---
+
 ## CI/CD Pipeline & GitOps Deployment
 
-GridTube uses a **Git-Flow** branching strategy paired with GitHub Actions multi-architecture (`linux/amd64`, `linux/arm64`) builds and automated **Flux CD GitOps** image promotion into [`steasdal/gitops`](https://github.com/steasdal/gitops).
+GridTube uses a **Git-Flow** branching strategy paired with a multi-job GitHub Actions DAG ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and automated **Flux CD GitOps** image promotion into [`steasdal/gitops`](https://github.com/steasdal/gitops).
 
 ```mermaid
 flowchart LR
-    PR["Pull Request\n(feature/* -> develop)"] -->|"Build & Verify\n(no push)"| DevWF["build-develop.yml"]
-    DevPush["Merge to develop"] -->|"Publish :develop &\n:develop-<sha>"| GHCR["GHCR\nghcr.io/steasdal/gridtube"]
-    DevPush -->|"Update dev/02-app.yaml"| GitOpsDev["steasdal/gitops\ngrid-dev.teasdale.dev"]
-    RelTag["Release Tag\n(e.g. 1.0.0)"] -->|"Publish :<version>\n& :latest"| GHCR
-    RelTag -->|"Update prod/02-app.yaml"| GitOpsProd["steasdal/gitops\ngrid.teasdale.dev"]
+    Checks["typecheck + docker-lint + smoke-test"] --> Build["docker-build-push\n(linux/amd64, linux/arm64)"]
+    Build -->|"push to develop"| Dev["deploy-dev\ngrid-dev.teasdale.dev"]
+    Build -->|"tag X.Y.Z / vX.Y.Z"| Prod["deploy-prod\ngrid.teasdale.dev"]
 ```
 
-### Workflows Overview
-
-| Workflow | Trigger | Image Tags Published | GitOps Target Updated (`steasdal/gitops`) | Live Route |
-| :--- | :--- | :--- | :--- | :--- |
-| **[build-develop.yml](.github/workflows/build-develop.yml)** | `pull_request` to `develop` / `main` | *None* (runs syntax checks & multi-arch build verification only) | *None* | — |
-| **[build-develop.yml](.github/workflows/build-develop.yml)** | `push` to `develop` (or manual dispatch) | `ghcr.io/steasdal/gridtube:develop`<br>`ghcr.io/steasdal/gridtube:develop-<sha>` | `apps/gridtube/dev/02-app.yaml` (`:develop-<sha>`) | `https://grid-dev.teasdale.dev` |
-| **[build-release.yml](.github/workflows/build-release.yml)** | `push` tag `X.Y.Z` or `vX.Y.Z` | `ghcr.io/steasdal/gridtube:<version>`<br>`ghcr.io/steasdal/gridtube:latest` | `apps/gridtube/prod/02-app.yaml` (`:<version>`) | `https://grid.teasdale.dev` |
-
-- **Automatic Branch Cleanup**: Merging a pull request on GitHub automatically deletes the head `feature/*` branch.
-- **Cross-Repository Authentication**: Both workflows authenticate to `steasdal/gitops` using an Ed25519 SSH deploy key stored in the `GITOPS_DEPLOY_KEY` repository secret.
+- **Pull Requests (`develop` / `main`)**: Runs `typecheck`, `docker-lint`, `smoke-test`, and verifies the multi-arch `docker-build-push` (`push: false`), skipping `deploy-dev` and `deploy-prod`.
+- **Push to `develop`**: Pushes `:develop` and `:develop-<sha>` to GHCR and updates `apps/gridtube/dev/02-app.yaml` in `steasdal/gitops`.
+- **Release Tag (`X.Y.Z` / `vX.Y.Z`)**: Stamps `version.yml`, pushes `:<version>` and `:latest` to GHCR, and updates `apps/gridtube/prod/02-app.yaml` in `steasdal/gitops`.
 
 ---
 
 ## Development & Release Workflow (`git-flow`)
 
-### 1. Working on a Feature (`feature/*` → `develop`)
-
-1. **Start a feature branch from `develop`**:
+1. **Feature work (`feature/*` → `develop`)**:
    ```bash
    git flow feature start <feature-name>
-   # Or with standard git:
-   # git checkout develop && git pull origin develop && git checkout -b feature/<feature-name>
-   ```
-2. **Commit and push your changes**:
-   ```bash
-   git add .
-   git commit -m "feat: describe your change"
+   git add . && git commit -m "feat: describe change"
    git push -u origin feature/<feature-name>
+   gh pr create --base develop --head feature/<feature-name> --fill
    ```
-3. **Open a Pull Request targeting `develop`**:
-   - Open a PR on GitHub with **base branch set to `develop`** (not `main`), or via the GitHub CLI:
-     ```bash
-     gh pr create --base develop --head feature/<feature-name> --fill
-     ```
-   - `build-develop.yml` will automatically run on the PR to validate JavaScript syntax and verify the multi-arch Docker build.
-4. **Merge the PR**:
-   - Once merged into `develop`, GitHub automatically deletes the remote `feature/<feature-name>` branch, builds and pushes `:develop` and `:develop-<sha>` to GHCR, and updates `apps/gridtube/dev/02-app.yaml` in `steasdal/gitops`.
-
----
-
-### 2. Starting and Finishing a Release (`release/*` → `main` & `develop`)
-
-When `develop` is tested on `https://grid-dev.teasdale.dev` and ready to promote to production (`https://grid.teasdale.dev`):
-
-#### Using `git-flow` CLI
-
-1. **Ensure local `develop` and `main` are up to date**:
+2. **Release (`release/*` → `main` & `develop`)**:
    ```bash
-   git checkout main && git pull origin main
-   git checkout develop && git pull origin develop
+   git fetch origin
+   git checkout develop && git merge --ff-only origin/develop
+   git checkout main && git merge --ff-only origin/main
+   git flow release start <version>
+   npm version --no-git-tag-version <version>
+   git add package.json && git commit -m "chore(release): <version>"
+   git flow release finish <version> -m "Release <version>"
+   git push origin main develop <version>
    ```
-2. **Start the release** (e.g. `1.1.0`):
-   ```bash
-   git flow release start 1.1.0
-   ```
-3. **(Optional) Bump version in `package.json` and commit**:
-   ```bash
-   npm version 1.1.0 --no-git-tag-version
-   git commit -am "chore(release): 1.1.0"
-   ```
-4. **Finish the release**:
-   ```bash
-   git flow release finish 1.1.0
-   ```
-   *(This merges `release/1.1.0` into `main`, tags `1.1.0`, merges back into `develop`, and deletes the local release branch).*
-5. **Push `main`, `develop`, and the new release tag to GitHub**:
-   ```bash
-   git push origin main develop --tags
-   ```
-
-#### Triggered Automation on Release Push
-Pushing the `1.1.0` tag triggers **[build-release.yml](.github/workflows/build-release.yml)**, which:
-1. Builds and pushes the multi-arch image tagged `ghcr.io/steasdal/gridtube:1.1.0` and `ghcr.io/steasdal/gridtube:latest`.
-2. Commits and pushes the updated image tag (`ghcr.io/steasdal/gridtube:1.1.0`) to `apps/gridtube/prod/02-app.yaml` in `steasdal/gitops`.
-3. Flux CD reconciles the change onto the cluster and rolls out the new release to `https://grid.teasdale.dev`.

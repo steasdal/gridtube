@@ -1,5 +1,10 @@
 node_modules
+.svelte-kit
+build
 data
 .git
 .DS_Store
 *.log
+.env
+.env.*
+test
