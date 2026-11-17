@@ -229,7 +229,7 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
 
     const landing = await request('/', { cookie: adminCookie });
     assert.equal(landing.status, 200);
-    assert.match(landing.raw, /GridTube/);
+    assert.match(landing.raw, /GridTube - Admin/);
     assert.match(landing.raw, /choo-choos/);
     assert.match(landing.raw, /href="\/admin"/);
     assert.match(landing.raw, /href="\/profile"/);
