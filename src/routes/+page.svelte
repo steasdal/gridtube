@@ -108,21 +108,6 @@
     </div>
 
     <div class="header-actions">
-      <a href="/profile" id="nav-profile-link" class="btn btn-secondary">
-        Profile ({data.user.username})
-      </a>
-      {#if data.user.role === 'admin'}
-        <a href="/admin" id="nav-admin-link" class="btn btn-secondary">Administration</a>
-      {/if}
-      <button
-        type="button"
-        id="logout-btn"
-        class="btn btn-secondary"
-        disabled={loggingOut}
-        onclick={handleLogout}
-      >
-        {loggingOut ? 'Logging out...' : 'Log Out'}
-      </button>
       <button
         type="button"
         id="new-grid-btn"
@@ -144,6 +129,21 @@
           <line x1="5" y1="12" x2="19" y2="12"></line>
         </svg>
         <span>New Grid</span>
+      </button>
+      <a href="/profile" id="nav-profile-link" class="btn btn-secondary">
+        Profile ({data.user.username})
+      </a>
+      {#if data.user.role === 'admin'}
+        <a href="/admin" id="nav-admin-link" class="btn btn-secondary">Administration</a>
+      {/if}
+      <button
+        type="button"
+        id="logout-btn"
+        class="btn btn-secondary"
+        disabled={loggingOut}
+        onclick={handleLogout}
+      >
+        {loggingOut ? 'Logging out...' : 'Log Out'}
       </button>
     </div>
   </header>
