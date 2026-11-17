@@ -233,6 +233,7 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
     assert.match(landing.raw, /choo-choos/);
     assert.match(landing.raw, /href="\/admin"/);
     assert.match(landing.raw, /href="\/profile"/);
+    assert.match(landing.raw, /id="nav-profile-link"[^>]*>Profile<\/a>/);
     const newGridPos = landing.raw.indexOf('id="new-grid-btn"');
     const profilePos = landing.raw.indexOf('id="nav-profile-link"');
     assert.ok(newGridPos > 0 && profilePos > newGridPos, 'New Grid button precedes Profile link');

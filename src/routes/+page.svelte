@@ -130,9 +130,7 @@
         </svg>
         <span>New Grid</span>
       </button>
-      <a href="/profile" id="nav-profile-link" class="btn btn-secondary">
-        Profile ({data.user.username})
-      </a>
+      <a href="/profile" id="nav-profile-link" class="btn btn-secondary">Profile</a>
       {#if data.user.role === 'admin'}
         <a href="/admin" id="nav-admin-link" class="btn btn-secondary">Administration</a>
       {/if}
