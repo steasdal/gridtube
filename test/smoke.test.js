@@ -19,12 +19,17 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 let tmpDataDir;
 let serverProc;
 let adminInitialPassword;
+let adminId;
 let adminCookie;
 
-function requestUrl(baseUrl, urlPath, { method = 'GET', body = null, cookie = '' } = {}) {
+function requestUrl(
+  baseUrl,
+  urlPath,
+  { method = 'GET', body = null, cookie = '', headers: extraHeaders = {} } = {}
+) {
   return new Promise((resolve, reject) => {
     const payload = body !== null ? JSON.stringify(body) : null;
-    const headers = {};
+    const headers = { ...extraHeaders };
     if (cookie) headers.Cookie = cookie;
     if (payload) {
       headers['Content-Type'] = 'application/json';
@@ -153,6 +158,7 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
     const setCookieHeader = String(res.headers['set-cookie']);
     assert.match(setCookieHeader, /HttpOnly/i);
     assert.match(setCookieHeader, /Max-Age=604800/i);
+    adminId = res.json.user.id;
     adminCookie = cookie;
   });
 
@@ -176,23 +182,70 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
     const anonGrids = await request('/api/grids');
     assert.equal(anonGrids.status, 401);
 
+    const anonMe = await request('/api/auth/me');
+    assert.equal(anonMe.status, 401);
+
+    const badLogin = await request('/api/auth/login', {
+      method: 'POST',
+      body: { username: 'admin', password: 'wrong-password-123' }
+    });
+    assert.equal(badLogin.status, 401);
+
+    const unknownLogin = await request('/api/auth/login', {
+      method: 'POST',
+      body: { username: 'nobody', password: 'wrong-password-123' }
+    });
+    assert.equal(unknownLogin.status, 401);
+
     const anonLanding = await request('/');
     assert.equal(anonLanding.status, 200);
     assert.match(anonLanding.raw, /id="login-form"/);
     assert.doesNotMatch(anonLanding.raw, /choo-choos/);
 
+    const evilNext = await request('/?next=//evil.com');
+    assert.equal(evilNext.status, 200);
+    assert.doesNotMatch(evilNext.raw, /evil\.com/);
+
     const anonDeepLink = await request('/grid/choo-choos');
     assert.equal(anonDeepLink.status, 302);
     assert.equal(anonDeepLink.headers.location, '/?next=%2Fgrid%2Fchoo-choos');
+
+    const anonProfile = await request('/profile');
+    assert.equal(anonProfile.status, 302);
+    assert.equal(anonProfile.headers.location, '/?next=%2Fprofile');
+
+    const anonAdmin = await request('/admin');
+    assert.equal(anonAdmin.status, 302);
+    assert.equal(anonAdmin.headers.location, '/?next=%2Fadmin');
   });
 
-  it('serves authenticated SSR pages and redirects unknown grid IDs to /', async () => {
+  it('serves authenticated SSR pages, Bearer auth, and header button order', async () => {
+    const token = adminCookie.split('=')[1];
+    const bearerMe = await request('/api/auth/me', {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    assert.equal(bearerMe.status, 200);
+    assert.equal(bearerMe.json.user.id, adminId);
+
     const landing = await request('/', { cookie: adminCookie });
     assert.equal(landing.status, 200);
     assert.match(landing.raw, /GridTube/);
     assert.match(landing.raw, /choo-choos/);
     assert.match(landing.raw, /href="\/admin"/);
     assert.match(landing.raw, /href="\/profile"/);
+    const newGridPos = landing.raw.indexOf('id="new-grid-btn"');
+    const profilePos = landing.raw.indexOf('id="nav-profile-link"');
+    assert.ok(newGridPos > 0 && profilePos > newGridPos, 'New Grid button precedes Profile link');
+
+    const profilePage = await request('/profile', { cookie: adminCookie });
+    assert.equal(profilePage.status, 200);
+    assert.match(profilePage.raw, /Change Username/);
+    assert.match(profilePage.raw, /Change Password/);
+
+    const adminPage = await request('/admin', { cookie: adminCookie });
+    assert.equal(adminPage.status, 200);
+    assert.match(adminPage.raw, /Administration/);
+    assert.match(adminPage.raw, /id="add-user-btn"/);
 
     const player = await request('/grid/choo-choos', { cookie: adminCookie });
     assert.equal(player.status, 200);
@@ -252,7 +305,27 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
   });
 
   it('enforces admin RBAC, user CRUD, grid privacy, profile updates, and logout', async () => {
-    // Reject short passwords (<12 chars), accept 12+ lowercase-only passwords
+    // Admin self-modification guards on /api/users/:id
+    const selfEdit = await request(`/api/users/${encodeURIComponent(adminId)}`, {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: { username: 'admin', role: 'user' }
+    });
+    assert.equal(selfEdit.status, 400);
+    const selfDelete = await request(`/api/users/${encodeURIComponent(adminId)}`, {
+      method: 'DELETE',
+      cookie: adminCookie
+    });
+    assert.equal(selfDelete.status, 400);
+
+    // Reject empty/control-char usernames and short passwords (<12 chars); accept 12+ lowercase
+    const badUsername = await request('/api/users', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { username: '   ', password: 'alllowercase', role: 'user' }
+    });
+    assert.equal(badUsername.status, 400);
+
     const tooShort = await request('/api/users', {
       method: 'POST',
       cookie: adminCookie,
@@ -283,7 +356,7 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
     assert.equal(userList.json.users.length, 1);
     assert.equal(userList.json.users[0].username, 'Alice');
 
-    // Login as Alice (case-insensitive username)
+    // Login twice as Alice (case-insensitive username) to test secondary session revocation
     const { res: aliceLogin, cookie: aliceCookie } = await loginAs(
       BASE_URL,
       'alice',
@@ -291,13 +364,16 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
     );
     assert.equal(aliceLogin.status, 200);
     assert.equal(aliceLogin.json.user.role, 'user');
+    const { cookie: aliceSecondCookie } = await loginAs(BASE_URL, 'Alice', 'alllowercase');
 
-    // Non-admin blocked from /api/users and /admin, and grids are strictly private
+    // Non-admin blocked from /api/users and /admin, and grids are strictly private (read & write)
     const forbiddenApi = await request('/api/users', { cookie: aliceCookie });
     assert.equal(forbiddenApi.status, 403);
     const forbiddenPage = await request('/admin', { cookie: aliceCookie });
     assert.equal(forbiddenPage.status, 302);
     assert.equal(forbiddenPage.headers.location, '/');
+    const aliceProfilePage = await request('/profile', { cookie: aliceCookie });
+    assert.equal(aliceProfilePage.status, 200);
 
     const aliceGridsEmpty = await request('/api/grids', { cookie: aliceCookie });
     assert.equal(aliceGridsEmpty.status, 200);
@@ -305,6 +381,20 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
 
     const adminGridByAlice = await request('/api/grids/choo-choos', { cookie: aliceCookie });
     assert.equal(adminGridByAlice.status, 404);
+    const adminGridUpdateByAlice = await request('/api/grids/choo-choos', {
+      method: 'PUT',
+      cookie: aliceCookie,
+      body: { name: 'Hijack', feeds: [] }
+    });
+    assert.equal(adminGridUpdateByAlice.status, 404);
+    const adminGridDeleteByAlice = await request('/api/grids/choo-choos', {
+      method: 'DELETE',
+      cookie: aliceCookie
+    });
+    assert.equal(adminGridDeleteByAlice.status, 404);
+    const adminGridPageByAlice = await request('/grid/choo-choos', { cookie: aliceCookie });
+    assert.equal(adminGridPageByAlice.status, 302);
+    assert.equal(adminGridPageByAlice.headers.location, '/');
 
     const aliceCreatedGrid = await request('/api/grids', {
       method: 'POST',
@@ -316,7 +406,22 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
     });
     assert.equal(aliceCreatedGrid.status, 201);
 
-    // Profile: wrong current password rejected, valid update works
+    // Profile: username-only collision -> 409, username-only update -> 200, wrong current pw -> 403
+    const dupProfileUsername = await request('/api/profile', {
+      method: 'PUT',
+      cookie: aliceCookie,
+      body: { username: 'ADMIN' }
+    });
+    assert.equal(dupProfileUsername.status, 409);
+
+    const usernameOnlyProfile = await request('/api/profile', {
+      method: 'PUT',
+      cookie: aliceCookie,
+      body: { username: 'AliceRenamed' }
+    });
+    assert.equal(usernameOnlyProfile.status, 200);
+    assert.equal(usernameOnlyProfile.json.user.username, 'AliceRenamed');
+
     const badProfilePw = await request('/api/profile', {
       method: 'PUT',
       cookie: aliceCookie,
@@ -324,17 +429,18 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
     });
     assert.equal(badProfilePw.status, 403);
 
+    // Password-only update keeps CURRENT session alive and revokes OTHER sessions for the same user
     const okProfile = await request('/api/profile', {
       method: 'PUT',
       cookie: aliceCookie,
       body: {
-        username: 'AliceRenamed',
         currentPassword: 'alllowercase',
         newPassword: 'newlowercasepw'
       }
     });
     assert.equal(okProfile.status, 200);
-    assert.equal(okProfile.json.user.username, 'AliceRenamed');
+    assert.equal((await request('/api/auth/me', { cookie: aliceCookie })).status, 200);
+    assert.equal((await request('/api/auth/me', { cookie: aliceSecondCookie })).status, 401);
 
     // Admin edits Alice's role/password without needing current password -> revokes Alice's session
     const adminEdit = await request(`/api/users/${encodeURIComponent(aliceId)}`, {
@@ -503,6 +609,98 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
     } finally {
       await stopProcess(started.proc);
       fs.rmSync(upgradeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('verifies 7-day sliding session refresh, expired cleanup, and user delete cascade', async () => {
+    const lifecycleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gridtube-session-test-'));
+    const lifecyclePort = PORT + 3;
+    const pgDataPath = path.join(lifecycleDir, 'pgdata');
+
+    let started = await startServer(lifecyclePort, lifecycleDir);
+    try {
+      const { res: loginRes, cookie } = await loginAs(
+        started.baseUrl,
+        'admin',
+        started.initialAdminPassword
+      );
+      assert.equal(loginRes.status, 200);
+
+      // Create user Bob with a grid, then delete Bob and verify DB cascade
+      const bobRes = await requestUrl(started.baseUrl, '/api/users', {
+        method: 'POST',
+        cookie,
+        body: { username: 'Bob', password: 'bobspassword12', role: 'user' }
+      });
+      assert.equal(bobRes.status, 201);
+      const bobId = bobRes.json.user.id;
+      const { cookie: bobCookie } = await loginAs(started.baseUrl, 'Bob', 'bobspassword12');
+
+      const bobGridRes = await requestUrl(started.baseUrl, '/api/grids', {
+        method: 'POST',
+        cookie: bobCookie,
+        body: {
+          name: 'Bob Private Grid',
+          feeds: [{ url: 'https://www.youtube.com/watch?v=4XYbh4Pegzw', volume: 50, muted: false }]
+        }
+      });
+      assert.equal(bobGridRes.status, 201);
+      const bobGridId = bobGridRes.json.id;
+
+      const delBob = await requestUrl(started.baseUrl, `/api/users/${encodeURIComponent(bobId)}`, {
+        method: 'DELETE',
+        cookie
+      });
+      assert.equal(delBob.status, 200);
+
+      await stopProcess(started.proc);
+
+      // Verify Bob's grids and grid_urls cascaded, then backdate admin session to test sliding window
+      const pgMid = new PGlite(pgDataPath);
+      const bobGridsAfter = await pgMid.query(`SELECT id FROM grids WHERE id = $1`, [bobGridId]);
+      assert.equal(bobGridsAfter.rows.length, 0);
+      const bobUrlsAfter = await pgMid.query(`SELECT id FROM grid_urls WHERE grid_id = $1`, [bobGridId]);
+      assert.equal(bobUrlsAfter.rows.length, 0);
+
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+      const fiveDaysLater = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000).toISOString();
+      await pgMid.query(`UPDATE user_sessions SET last_seen_at = $1, expires_at = $2`, [
+        twoDaysAgo,
+        fiveDaysLater
+      ]);
+      await pgMid.close();
+
+      started = await startServer(lifecyclePort, lifecycleDir);
+      const slideRes = await requestUrl(started.baseUrl, '/api/auth/me', { cookie });
+      assert.equal(slideRes.status, 200);
+      assert.match(String(slideRes.headers['set-cookie']), /gridtube_session=.*Max-Age=604800/i);
+
+      await stopProcess(started.proc);
+
+      const pgCheckSlide = new PGlite(pgDataPath);
+      const slidRows = await pgCheckSlide.query(`SELECT expires_at FROM user_sessions LIMIT 1`);
+      assert.equal(slidRows.rows.length, 1);
+      assert.ok(new Date(slidRows.rows[0].expires_at).getTime() > Date.parse(fiveDaysLater));
+
+      // Expire the session in DB and confirm rejection + row cleanup + cookie clearing
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      await pgCheckSlide.query(`UPDATE user_sessions SET expires_at = $1`, [oneHourAgo]);
+      await pgCheckSlide.close();
+
+      started = await startServer(lifecyclePort, lifecycleDir);
+      const expiredRes = await requestUrl(started.baseUrl, '/api/auth/me', { cookie });
+      assert.equal(expiredRes.status, 401);
+      const clearedCookieHeader = String(expiredRes.headers['set-cookie'] || '');
+      assert.match(clearedCookieHeader, /gridtube_session=;/i);
+
+      await stopProcess(started.proc);
+      const pgAfterExpiry = new PGlite(pgDataPath);
+      const remaining = await pgAfterExpiry.query(`SELECT id FROM user_sessions`);
+      assert.equal(remaining.rows.length, 0);
+      await pgAfterExpiry.close();
+    } finally {
+      await stopProcess(started.proc);
+      fs.rmSync(lifecycleDir, { recursive: true, force: true });
     }
   });
 });
