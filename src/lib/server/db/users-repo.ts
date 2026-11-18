@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { and, asc, eq, ne } from 'drizzle-orm';
 import { deleteSessionsForUser } from '$lib/server/auth';
 import { getDb } from '$lib/server/db';
-import { users } from '$lib/server/db/schema';
+import { publicGrids, users } from '$lib/server/db/schema';
 import { hashPassword, toPublicUser, verifyPassword } from '$lib/server/password';
 import type { AuthUser, UserRole } from '$lib/types';
 
@@ -144,6 +144,10 @@ export async function updateManagedUser(
       updatedAt: now
     })
     .where(eq(users.id, targetId));
+
+  if (updates.role !== 'admin') {
+    await db.delete(publicGrids).where(eq(publicGrids.userId, targetId));
+  }
 
   if (updates.password || updates.role !== existing.role) {
     await deleteSessionsForUser(targetId);

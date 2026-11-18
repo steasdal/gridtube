@@ -2,8 +2,9 @@
   import { goto, invalidateAll } from '$app/navigation';
   import { onMount } from 'svelte';
   import { formatDisplayUsername } from '$lib/auth';
-  import { logoutApi } from '$lib/client/api';
+  import { logoutApi, setGridPublicApi } from '$lib/client/api';
   import DeleteConfirmModal from '$lib/components/DeleteConfirmModal.svelte';
+  import GridCard from '$lib/components/GridCard.svelte';
   import GridFormModal from '$lib/components/GridFormModal.svelte';
   import LoginView from '$lib/components/LoginView.svelte';
   import type { Grid } from '$lib/types';
@@ -12,10 +13,11 @@
 
   let { data }: { data: PageData } = $props();
 
-  let grids = $state<Grid[]>([]);
+  let grids = $derived<Grid[]>(data.grids);
   let statusMessage = $state('');
   let statusTimer: ReturnType<typeof setTimeout> | null = null;
   let loggingOut = $state(false);
+  let togglingPublicIds = $state<Record<string, boolean>>({});
   let formModal: GridFormModal | undefined = $state();
   let deleteModal: DeleteConfirmModal | undefined = $state();
 
@@ -30,10 +32,6 @@
       loggingOut = false;
     }
   }
-
-  $effect(() => {
-    grids = data.grids;
-  });
 
   function showStatusBanner(message: string) {
     statusMessage = message;
@@ -73,6 +71,27 @@
     showStatusBanner(`Deleted grid "${removed.name}".`);
   }
 
+  async function handleTogglePublic(grid: Grid) {
+    if (togglingPublicIds[grid.id]) return;
+    togglingPublicIds = { ...togglingPublicIds, [grid.id]: true };
+    const nextPublic = !grid.isPublic;
+    try {
+      const res = await setGridPublicApi(grid.id, nextPublic);
+      grids = grids.map((g) => (g.id === res.grid.id ? res.grid : g));
+      showStatusBanner(
+        res.grid.isPublic
+          ? `"${res.grid.name}" is now public.`
+          : `"${res.grid.name}" is now private.`
+      );
+    } catch (err) {
+      showStatusBanner(err instanceof Error ? err.message : 'Could not update grid visibility.');
+    } finally {
+      const rest = { ...togglingPublicIds };
+      delete rest[grid.id];
+      togglingPublicIds = rest;
+    }
+  }
+
   onMount(() => {
     // Support bookmarks using the legacy #/grid/<id> hash format
     if (window.location.hash.startsWith('#/grid/')) {
@@ -89,7 +108,11 @@
 </svelte:head>
 
 {#if !data.user}
-  <LoginView redirectTo={data.redirectTo} version={data.version} />
+  <LoginView
+    redirectTo={data.redirectTo}
+    version={data.version}
+    publicGrids={data.publicGrids}
+  />
 {:else}
 <section id="landing-view" class="landing-view" aria-labelledby="landing-heading">
   <header class="site-header">
@@ -160,90 +183,77 @@
       <ul id="grids-list" class="grids-list">
         {#each grids as grid (grid.id)}
           {@const activeCount = countActiveFeeds(grid)}
-          <li class="grid-card">
-            <button
-              type="button"
-              class="card-launch-btn"
-              aria-label={`Open ${grid.name} stream grid`}
-              onclick={() => openGrid(grid.id)}
-            >
-              <div class="card-preview-matrix">
-                {#each [0, 1, 2, 3] as i (i)}
-                  {@const thumbUrl = buildThumbnailUrl(grid.feeds?.[i])}
-                  <div class:preview-slot={true} class:preview-slot-empty={!thumbUrl}>
-                    {#if thumbUrl}
-                      <img src={thumbUrl} alt="" width="320" height="180" loading="lazy" />
-                    {:else}
-                      <span>Empty</span>
-                    {/if}
-                    <span class="preview-slot-badge" aria-hidden="true">{i + 1}</span>
-                  </div>
-                {/each}
-              </div>
-            </button>
-
-            <div class="card-footer">
-              <div class="card-meta">
-                <button
-                  type="button"
-                  class="card-title-btn"
-                  onclick={() => openGrid(grid.id)}
-                >
-                  {grid.name}
-                </button>
-                <span class="card-count">{activeCount} of 4 feeds configured</span>
-              </div>
-
-              <div class="card-actions">
-                <button
-                  type="button"
-                  class="icon-btn"
-                  aria-label={`Edit ${grid.name}`}
-                  onclick={() => formModal?.openEdit(grid)}
-                >
-                  <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
+          <GridCard
+            {grid}
+            subtitle={`${activeCount} of 4 feeds configured`}
+            onOpen={openGrid}
+          >
+            {#snippet footerRight()}
+              <div class="card-actions-col">
+                <div class="card-actions">
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    aria-label={`Edit ${grid.name}`}
+                    onclick={() => formModal?.openEdit(grid)}
                   >
-                    <path d="M12 20h9"></path>
-                    <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-                  </svg>
-                </button>
-                <button
-                  type="button"
-                  class="icon-btn icon-btn-danger"
-                  aria-label={`Delete ${grid.name}`}
-                  onclick={() => deleteModal?.open(grid)}
-                >
-                  <svg
-                    width="18"
-                    height="18"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    aria-hidden="true"
+                    <svg
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 20h9"></path>
+                      <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    class="icon-btn icon-btn-danger"
+                    aria-label={`Delete ${grid.name}`}
+                    onclick={() => deleteModal?.open(grid)}
                   >
-                    <polyline points="3 6 5 6 21 6"></polyline>
-                    <path
-                      d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
-                    ></path>
-                    <line x1="10" y1="11" x2="10" y2="17"></line>
-                    <line x1="14" y1="11" x2="14" y2="17"></line>
-                  </svg>
-                </button>
+                    <svg
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <polyline points="3 6 5 6 21 6"></polyline>
+                      <path
+                        d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                      ></path>
+                      <line x1="10" y1="11" x2="10" y2="17"></line>
+                      <line x1="14" y1="11" x2="14" y2="17"></line>
+                    </svg>
+                  </button>
+                </div>
+                {#if data.user?.role === 'admin'}
+                  <button
+                    type="button"
+                    class="visibility-pill"
+                    class:visibility-pill-public={grid.isPublic}
+                    aria-pressed={grid.isPublic ? 'true' : 'false'}
+                    aria-label={grid.isPublic ? `Make ${grid.name} private` : `Make ${grid.name} public`}
+                    disabled={Boolean(togglingPublicIds[grid.id])}
+                    onclick={() => handleTogglePublic(grid)}
+                  >
+                    {grid.isPublic ? 'public' : 'private'}
+                  </button>
+                {/if}
               </div>
-            </div>
-          </li>
+            {/snippet}
+          </GridCard>
         {/each}
       </ul>
     {:else}
@@ -294,6 +304,6 @@
   {/if}
 </section>
 
-<GridFormModal bind:this={formModal} onSaved={handleSaved} />
+<GridFormModal bind:this={formModal} canPublish={data.user.role === 'admin'} onSaved={handleSaved} />
 <DeleteConfirmModal bind:this={deleteModal} onDeleted={handleDeleted} />
 {/if}

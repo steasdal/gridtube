@@ -14,9 +14,10 @@
     onSaved: (grid: Grid, isEdit: boolean) => Promise<void> | void;
     onDialogOpenChange?: (open: boolean) => void;
     onBeforeSubmitEdit?: (gridId: string) => void;
+    canPublish?: boolean;
   }
 
-  let { onSaved, onDialogOpenChange, onBeforeSubmitEdit }: Props = $props();
+  let { onSaved, onDialogOpenChange, onBeforeSubmitEdit, canPublish = false }: Props = $props();
 
   let dialogEl: HTMLDialogElement | undefined = $state();
   let formEl: HTMLFormElement | undefined = $state();
@@ -36,6 +37,7 @@
   let feedVolumes = $state([100, 100, 100, 100]);
   let feedMuted = $state([false, false, false, false]);
   let lastNonZeroVolume = [100, 100, 100, 100];
+  let isPublic = $state(false);
   let serverError = $state('');
   let saving = $state(false);
 
@@ -82,6 +84,7 @@
     }
     modalTitle = 'Add New Stream Grid';
     submitLabel = 'Create Grid';
+    isPublic = false;
     serverError = '';
     validationCtrl?.reset();
     onDialogOpenChange?.(true);
@@ -105,6 +108,7 @@
     feedUrls = nextUrls;
     modalTitle = `Edit "${grid.name}"`;
     submitLabel = 'Save Changes';
+    isPublic = Boolean(grid.isPublic);
     serverError = '';
     validationCtrl?.reset();
     onDialogOpenChange?.(true);
@@ -139,7 +143,8 @@
     }));
     const payload = {
       name: gridName.trim(),
-      feeds
+      feeds,
+      ...(canPublish ? { isPublic } : {})
     };
 
     saving = true;
@@ -326,6 +331,21 @@
         {/each}
       </div>
     </fieldset>
+
+    {#if canPublish}
+      <div class="field field-checkbox">
+        <label class="checkbox-toggle" for="grid-public-checkbox">
+          <input
+            id="grid-public-checkbox"
+            name="isPublic"
+            type="checkbox"
+            bind:checked={isPublic}
+          />
+          <span>Public grid</span>
+        </label>
+        <span class="hint">Display this grid on the landing page for non-logged-in visitors.</span>
+      </div>
+    {/if}
 
     {#if serverError}
       <div id="form-server-error" class="form-server-error" role="alert">

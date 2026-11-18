@@ -34,8 +34,14 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     return jsonNoStore({ error: validated.error }, 400);
   }
 
+  const rawBody = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  const isPublic = rawBody.isPublic === true;
+  if (isPublic && auth.user.role !== 'admin') {
+    return jsonNoStore({ error: 'Only administrators can make grids public.' }, 403);
+  }
+
   try {
-    const created = await createGrid(auth.user.id, validated.name, validated.feeds);
+    const created = await createGrid(auth.user.id, validated.name, validated.feeds, isPublic);
     return jsonNoStore(created, 201);
   } catch (err) {
     console.error('POST /api/grids failed:', err);

@@ -47,6 +47,7 @@ export async function requestJson<T>(
 export interface GridPayload {
   name: string;
   feeds: FeedEntry[];
+  isPublic?: boolean;
 }
 
 export function createGridApi(payload: GridPayload): Promise<Grid> {
@@ -86,6 +87,18 @@ export function deleteGridApi(id: string): Promise<{ deleted: string }> {
       headers: { 'Content-Type': 'application/json' }
     },
     'Failed to delete grid.'
+  );
+}
+
+export function setGridPublicApi(id: string, isPublic: boolean): Promise<{ grid: Grid }> {
+  return requestJson<{ grid: Grid }>(
+    `/api/grids/${encodeURIComponent(id)}/public`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ isPublic })
+    },
+    'Could not update grid visibility.'
   );
 }
 

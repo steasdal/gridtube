@@ -1,6 +1,6 @@
 import type { PageServerLoad } from './$types';
 import { sanitizeRedirectPath } from '$lib/auth';
-import { listGrids } from '$lib/server/db/grids-repo';
+import { listGrids, listPublicGrids } from '$lib/server/db/grids-repo';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
   const redirectTo = sanitizeRedirectPath(url.searchParams.get('next'));
@@ -8,6 +8,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     return {
       user: null,
       grids: [],
+      publicGrids: await listPublicGrids(),
       redirectTo
     };
   }
@@ -15,6 +16,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   return {
     user: locals.user,
     grids: await listGrids(locals.user.id),
+    publicGrids: [],
     redirectTo: '/'
   };
 };

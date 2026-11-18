@@ -4,12 +4,20 @@
   interface Props {
     gridName: string;
     isFullscreen: boolean;
+    readOnly?: boolean;
     onBack: () => void;
     onEdit: () => void;
     onToggleFullscreen: () => void;
   }
 
-  let { gridName, isFullscreen, onBack, onEdit, onToggleFullscreen }: Props = $props();
+  let {
+    gridName,
+    isFullscreen,
+    readOnly = false,
+    onBack,
+    onEdit,
+    onToggleFullscreen
+  }: Props = $props();
 
   let hudEl: HTMLElement | undefined = $state();
   let toggleBtnEl: HTMLButtonElement | undefined = $state();
@@ -78,32 +86,34 @@
     <h2 id="player-grid-title" class="hud-title">{gridName}</h2>
 
     <div class="hud-actions">
-      <button
-        type="button"
-        id="edit-active-grid-btn"
-        class="hud-btn"
-        aria-label="Edit feeds in this grid"
-        onclick={() => {
-          setOpen(false);
-          onEdit();
-        }}
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
+      {#if !readOnly}
+        <button
+          type="button"
+          id="edit-active-grid-btn"
+          class="hud-btn"
+          aria-label="Edit feeds in this grid"
+          onclick={() => {
+            setOpen(false);
+            onEdit();
+          }}
         >
-          <path d="M12 20h9"></path>
-          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
-        </svg>
-        <span>Edit</span>
-      </button>
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M12 20h9"></path>
+            <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path>
+          </svg>
+          <span>Edit</span>
+        </button>
+      {/if}
 
       <button
         type="button"

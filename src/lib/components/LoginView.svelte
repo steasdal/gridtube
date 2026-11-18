@@ -1,14 +1,18 @@
 <script lang="ts">
   import { goto, invalidateAll } from '$app/navigation';
+  import { formatDisplayUsername } from '$lib/auth';
   import { loginApi } from '$lib/client/api';
+  import GridCard from '$lib/components/GridCard.svelte';
   import PasswordInput from '$lib/components/PasswordInput.svelte';
+  import type { PublicGrid } from '$lib/types';
 
   interface Props {
     redirectTo?: string;
     version?: string | null;
+    publicGrids?: PublicGrid[];
   }
 
-  let { redirectTo = '/', version = null }: Props = $props();
+  let { redirectTo = '/', version = null, publicGrids = [] }: Props = $props();
 
   let username = $state('');
   let password = $state('');
@@ -40,9 +44,13 @@
       submitting = false;
     }
   }
+
+  function openPublicGrid(gridId: string) {
+    goto(`/grid/${encodeURIComponent(gridId)}`);
+  }
 </script>
 
-<section class="auth-shell" aria-labelledby="login-heading">
+{#snippet loginCard()}
   <div class="auth-card">
     <div class="auth-brand">
       <div class="brand-logo" aria-hidden="true">
@@ -96,18 +104,59 @@
       </button>
     </form>
   </div>
+{/snippet}
 
-  {#if version}
-    <footer class="landing-footer">
-      <a
-        id="app-version"
-        class="landing-version"
-        href="https://github.com/steasdal/gridtube"
-        target="_blank"
-        rel="noopener noreferrer"
-      >
-        Version {version}
-      </a>
-    </footer>
-  {/if}
-</section>
+{#if publicGrids.length > 0}
+  <section class="landing-view auth-landing-with-public" aria-labelledby="login-heading">
+    <div class="auth-top-panel">
+      {@render loginCard()}
+    </div>
+
+    <hr class="landing-divider" />
+
+    <section id="public-grids-section" class="grids-section" aria-labelledby="public-grids-heading">
+      <h2 id="public-grids-heading" class="public-grids-heading">Public Grids</h2>
+      <ul id="public-grids-list" class="grids-list">
+        {#each publicGrids as grid (grid.id)}
+          <GridCard
+            {grid}
+            subtitle={`provided by ${formatDisplayUsername(grid.ownerUsername)}`}
+            onOpen={openPublicGrid}
+          />
+        {/each}
+      </ul>
+    </section>
+
+    {#if version}
+      <footer class="landing-footer">
+        <a
+          id="app-version"
+          class="landing-version"
+          href="https://github.com/steasdal/gridtube"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Version {version}
+        </a>
+      </footer>
+    {/if}
+  </section>
+{:else}
+  <section class="auth-shell" aria-labelledby="login-heading">
+    {@render loginCard()}
+
+    {#if version}
+      <footer class="landing-footer">
+        <a
+          id="app-version"
+          class="landing-version"
+          href="https://github.com/steasdal/gridtube"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Version {version}
+        </a>
+      </footer>
+    {/if}
+  </section>
+{/if}

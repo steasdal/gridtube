@@ -41,8 +41,17 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
     return jsonNoStore({ error: validated.error }, 400);
   }
 
+  const rawBody = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+  let isPublic: boolean | undefined;
+  if (typeof rawBody.isPublic === 'boolean') {
+    if (auth.user.role !== 'admin') {
+      return jsonNoStore({ error: 'Only administrators can change public grid visibility.' }, 403);
+    }
+    isPublic = rawBody.isPublic;
+  }
+
   try {
-    const updated = await updateGrid(id, auth.user.id, validated.name, validated.feeds);
+    const updated = await updateGrid(id, auth.user.id, validated.name, validated.feeds, isPublic);
     if (!updated) {
       return jsonNoStore({ error: 'Grid not found.' }, 404);
     }

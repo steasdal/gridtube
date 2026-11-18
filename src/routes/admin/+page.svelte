@@ -6,15 +6,11 @@
 
   let { data }: { data: PageData } = $props();
 
-  let users = $state<AuthUser[]>([]);
+  let users = $derived<AuthUser[]>(data.users);
   let statusMessage = $state('');
   let statusTimer: ReturnType<typeof setTimeout> | null = null;
   let userFormModal: UserFormModal | undefined = $state();
   let deleteUserModal: DeleteUserModal | undefined = $state();
-
-  $effect(() => {
-    users = data.users;
-  });
 
   function showStatusBanner(message: string) {
     statusMessage = message;

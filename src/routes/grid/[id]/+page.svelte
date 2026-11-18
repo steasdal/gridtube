@@ -13,6 +13,7 @@
   let { data }: { data: PageData } = $props();
 
   let grid = $derived<Grid>(data.grid);
+  let readOnly = $derived(Boolean(data.readOnly));
   let playerViewEl: HTMLElement | undefined = $state();
   let streamWallEl: HTMLElement | undefined = $state();
   let hud: PlayerHud | undefined = $state();
@@ -40,7 +41,7 @@
   }
 
   async function persistAudioChanges({ keepalive = false } = {}) {
-    if (inFlightAudioSave) return;
+    if (readOnly || inFlightAudioSave) return;
 
     const saveRevision = audioSaveRevision;
     const gridToSave = grid;
@@ -78,7 +79,7 @@
   }
 
   function flushAudioPersist({ keepalive = false } = {}) {
-    if (!audioSaveTimer && !dirtyAudioSave) return;
+    if (readOnly || (!audioSaveTimer && !dirtyAudioSave)) return;
     clearPendingAudioSave();
     persistAudioChanges({ keepalive });
   }
@@ -87,6 +88,7 @@
     const nextFeeds = normalizeFeedsList(grid.feeds);
     nextFeeds[paneIndex] = nextFeed;
     grid = { ...grid, feeds: nextFeeds };
+    if (readOnly) return;
     audioSaveRevision += 1;
     dirtyAudioSave = true;
     scheduleAudioPersist();
@@ -101,6 +103,7 @@
   }
 
   function handleEdit(focusFeedIndex: number | null = null) {
+    if (readOnly) return;
     flushAudioPersist();
     formModal?.openEdit(grid, focusFeedIndex);
   }
@@ -196,6 +199,7 @@
     bind:this={hud}
     gridName={grid.name}
     {isFullscreen}
+    {readOnly}
     onBack={handleBack}
     onEdit={() => handleEdit(null)}
     onToggleFullscreen={toggleFullscreen}
@@ -204,20 +208,24 @@
   <StreamWall
     bind:streamWallEl
     {grid}
+    {readOnly}
     isModalOpen={() => isModalOpen}
     onConfigureSlot={(idx) => handleEdit(idx)}
     onLiveAudioChange={handleLiveAudioChange}
   />
 </section>
 
-<GridFormModal
-  bind:this={formModal}
-  onSaved={handleModalSaved}
-  onDialogOpenChange={(open) => {
-    isModalOpen = open;
-    if (!open) {
-      viewportCtrl?.scheduleSync({ withRotationRetries: true });
-    }
-  }}
-  onBeforeSubmitEdit={() => clearPendingAudioSave({ clearDirty: true })}
-/>
+{#if !readOnly}
+  <GridFormModal
+    bind:this={formModal}
+    canPublish={Boolean(data.canPublish)}
+    onSaved={handleModalSaved}
+    onDialogOpenChange={(open) => {
+      isModalOpen = open;
+      if (!open) {
+        viewportCtrl?.scheduleSync({ withRotationRetries: true });
+      }
+    }}
+    onBeforeSubmitEdit={() => clearPendingAudioSave({ clearDirty: true })}
+  />
+{/if}

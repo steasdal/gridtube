@@ -704,4 +704,183 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
       fs.rmSync(lifecycleDir, { recursive: true, force: true });
     }
   });
+
+  it('supports admin public grids on logged-out landing page, read-only player view, and visibility rules', async () => {
+    // 0 public grids initially -> no Public Grids section when logged out
+    const anonEmpty = await request('/');
+    assert.equal(anonEmpty.status, 200);
+    assert.match(anonEmpty.raw, /id="login-form"/);
+    assert.doesNotMatch(anonEmpty.raw, /id="public-grids-section"/);
+
+    // Create admin 'sam' and regular user 'viewer'
+    const samCreate = await request('/api/users', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { username: 'sam', password: 'sampassword12', role: 'admin' }
+    });
+    assert.equal(samCreate.status, 201);
+    const samId = samCreate.json.user.id;
+    const { cookie: samCookie } = await loginAs(BASE_URL, 'sam', 'sampassword12');
+
+    const viewerCreate = await request('/api/users', {
+      method: 'POST',
+      cookie: adminCookie,
+      body: { username: 'viewer', password: 'viewerpass12', role: 'user' }
+    });
+    assert.equal(viewerCreate.status, 201);
+    const viewerId = viewerCreate.json.user.id;
+    const { cookie: viewerCookie } = await loginAs(BASE_URL, 'viewer', 'viewerpass12');
+
+    // Regular user cannot create a public grid or publish an existing one
+    const userPubCreate = await request('/api/grids', {
+      method: 'POST',
+      cookie: viewerCookie,
+      body: { name: 'Forbidden Public', feeds: [], isPublic: true }
+    });
+    assert.equal(userPubCreate.status, 403);
+
+    const viewerGrid = await request('/api/grids', {
+      method: 'POST',
+      cookie: viewerCookie,
+      body: {
+        name: 'Viewer Private Grid',
+        feeds: [{ url: 'https://www.youtube.com/watch?v=4XYbh4Pegzw', volume: 50, muted: false }]
+      }
+    });
+    assert.equal(viewerGrid.status, 201);
+    assert.equal(viewerGrid.json.isPublic, false);
+
+    const userPubToggle = await request(`/api/grids/${encodeURIComponent(viewerGrid.json.id)}/public`, {
+      method: 'PUT',
+      cookie: viewerCookie,
+      body: { isPublic: true }
+    });
+    assert.equal(userPubToggle.status, 403);
+
+    // Admin cannot toggle visibility of another user's grid
+    const adminToggleOther = await request(
+      `/api/grids/${encodeURIComponent(viewerGrid.json.id)}/public`,
+      {
+        method: 'PUT',
+        cookie: samCookie,
+        body: { isPublic: true }
+      }
+    );
+    assert.equal(adminToggleOther.status, 404);
+
+    // Non-admin SSR `/` does not render visibility pill
+    const viewerLanding = await request('/', { cookie: viewerCookie });
+    assert.equal(viewerLanding.status, 200);
+    assert.doesNotMatch(viewerLanding.raw, /class="visibility-pill"/);
+
+    // Admin 'sam' creates a private grid and toggles it public via /public endpoint
+    const samGridRes = await request('/api/grids', {
+      method: 'POST',
+      cookie: samCookie,
+      body: {
+        name: 'Sam Shared Wall',
+        feeds: [{ url: 'https://www.youtube.com/watch?v=4XYbh4Pegzw', volume: 65, muted: false }]
+      }
+    });
+    assert.equal(samGridRes.status, 201);
+    const samGridId = samGridRes.json.id;
+    assert.equal(samGridRes.json.isPublic, false);
+
+    const samLandingPrivate = await request('/', { cookie: samCookie });
+    assert.match(samLandingPrivate.raw, /class="visibility-pill"/);
+    assert.match(samLandingPrivate.raw, />private<\/button>/);
+
+    const publishRes = await request(`/api/grids/${encodeURIComponent(samGridId)}/public`, {
+      method: 'PUT',
+      cookie: samCookie,
+      body: { isPublic: true }
+    });
+    assert.equal(publishRes.status, 200);
+    assert.equal(publishRes.json.grid.isPublic, true);
+
+    const samLandingPublic = await request('/', { cookie: samCookie });
+    assert.match(samLandingPublic.raw, /visibility-pill-public/);
+    assert.match(samLandingPublic.raw, />public<\/button>/);
+
+    // Editing feeds without specifying isPublic preserves public state
+    const feedUpdate = await request(`/api/grids/${encodeURIComponent(samGridId)}`, {
+      method: 'PUT',
+      cookie: samCookie,
+      body: {
+        name: 'Sam Shared Wall',
+        feeds: [{ url: 'https://www.youtube.com/watch?v=4XYbh4Pegzw', volume: 72, muted: false }]
+      }
+    });
+    assert.equal(feedUpdate.status, 200);
+    assert.equal(feedUpdate.json.isPublic, true);
+
+    // Logged-out landing page shows login card + divider + Public Grids without edit/delete
+    const anonWithPublic = await request('/');
+    assert.equal(anonWithPublic.status, 200);
+    assert.match(anonWithPublic.raw, /id="login-form"/);
+    assert.match(anonWithPublic.raw, /class="landing-divider"/);
+    assert.match(anonWithPublic.raw, /id="public-grids-section"/);
+    assert.match(anonWithPublic.raw, /Sam Shared Wall/);
+    assert.match(anonWithPublic.raw, /provided by Sam/);
+    assert.doesNotMatch(anonWithPublic.raw, /Edit Sam Shared Wall/);
+    assert.doesNotMatch(anonWithPublic.raw, /Delete Sam Shared Wall/);
+
+    // Logged-out visitor can open public grid in read-only mode (no Edit / Add Feed URL)
+    const anonPublicPlayer = await request(`/grid/${encodeURIComponent(samGridId)}`);
+    assert.equal(anonPublicPlayer.status, 200);
+    assert.match(anonPublicPlayer.raw, /Sam Shared Wall/);
+    assert.doesNotMatch(anonPublicPlayer.raw, /id="edit-active-grid-btn"/);
+    assert.doesNotMatch(anonPublicPlayer.raw, /Add Feed URL/);
+
+    // Logged-out visitor cannot persist volume/grid changes via API
+    const anonPutPublic = await request(`/api/grids/${encodeURIComponent(samGridId)}`, {
+      method: 'PUT',
+      body: { name: 'Tampered', feeds: [] }
+    });
+    assert.equal(anonPutPublic.status, 401);
+
+    // Logged-in users (both viewer and other admin) still see ONLY their own grids
+    const viewerLandingAfter = await request('/', { cookie: viewerCookie });
+    assert.doesNotMatch(viewerLandingAfter.raw, /Sam Shared Wall/);
+    const otherAdminLanding = await request('/', { cookie: adminCookie });
+    assert.doesNotMatch(otherAdminLanding.raw, /Sam Shared Wall/);
+    const viewerOpenSamGrid = await request(`/grid/${encodeURIComponent(samGridId)}`, {
+      cookie: viewerCookie
+    });
+    assert.equal(viewerOpenSamGrid.status, 302);
+    assert.equal(viewerOpenSamGrid.headers.location, '/');
+
+    // Renaming sam updates "provided by ..." dynamically
+    const renameSam = await request('/api/profile', {
+      method: 'PUT',
+      cookie: samCookie,
+      body: { username: 'samuel' }
+    });
+    assert.equal(renameSam.status, 200);
+    const anonAfterRename = await request('/');
+    assert.match(anonAfterRename.raw, /provided by Samuel/);
+
+    // Demoting sam from admin -> user removes sam's grids from Public Grids
+    const demoteSam = await request(`/api/users/${encodeURIComponent(samId)}`, {
+      method: 'PUT',
+      cookie: adminCookie,
+      body: { username: 'samuel', role: 'user' }
+    });
+    assert.equal(demoteSam.status, 200);
+
+    const anonAfterDemote = await request('/');
+    assert.doesNotMatch(anonAfterDemote.raw, /id="public-grids-section"/);
+    const anonAfterDemotePlayer = await request(`/grid/${encodeURIComponent(samGridId)}`);
+    assert.equal(anonAfterDemotePlayer.status, 302);
+
+    // Clean up test users
+    await request(`/api/users/${encodeURIComponent(samId)}`, {
+      method: 'DELETE',
+      cookie: adminCookie
+    });
+    await request(`/api/users/${encodeURIComponent(viewerId)}`, {
+      method: 'DELETE',
+      cookie: adminCookie
+    });
+  });
 });
