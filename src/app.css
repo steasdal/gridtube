@@ -531,6 +531,11 @@ h2:focus,
 /* ========================
    PLAYER VIEW (100% SCREEN REAL ESTATE FOR VIDEOS)
    ======================== */
+:root:has(.player-view),
+body:has(.player-view) {
+  background-color: #000000;
+}
+
 .player-view {
   position: fixed;
   inset-block-start: 0;
@@ -582,7 +587,7 @@ h2:focus,
 .pane-audio-btn {
   position: absolute;
   inset-block-end: max(0.5rem, env(safe-area-inset-bottom, 0px));
-  inset-inline-start: max(0.5rem, env(safe-area-inset-left, 0px));
+  inset-inline-start: 0.5rem;
   z-index: 15;
   display: inline-flex;
   align-items: safe center;
@@ -605,6 +610,10 @@ h2:focus,
   content: "";
   position: absolute;
   inset: -4px;
+}
+
+.stream-pane:nth-child(odd) .pane-audio-btn {
+  inset-inline-start: max(0.5rem, env(safe-area-inset-left, 0px));
 }
 
 .pane-audio-btn:focus-visible {

@@ -37,13 +37,15 @@ export function createPlayerViewportController({
 }) {
   const { isIOS, isIPad, isCriOS } = detectPlatformFlags();
   let viewportMeta = document.querySelector('meta[name="viewport"]');
-  const BASE_VIEWPORT_CONTENT = isIPad
+  const INITIAL_VIEWPORT_CONTENT = viewportMeta?.getAttribute('content') || 'width=device-width, initial-scale=1, viewport-fit=cover';
+  // On iOS Safari, viewport-fit=cover pushes cross-origin YouTube iframes right by safe-area-inset-left
+  // in landscape (and locks WKWebView portrait width on iPad rotation), so use standard width=device-width.
+  const BASE_VIEWPORT_CONTENT = isIOS
     ? 'width=device-width, initial-scale=1'
-    : 'width=device-width, initial-scale=1, viewport-fit=cover';
+    : INITIAL_VIEWPORT_CONTENT;
 
-  if (isIPad && viewportMeta) {
-    // iPads have no notch; viewport-fit=cover can lock WKWebView layout width to portrait on rotation
-    viewportMeta.setAttribute('content', BASE_VIEWPORT_CONTENT);
+  if (isIOS && viewportMeta) {
+    setViewportMetaContent(BASE_VIEWPORT_CONTENT, { forceReparse: true });
   }
 
   let viewportMetaRefreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -310,8 +312,11 @@ export function createPlayerViewportController({
       if (viewportMetaRefreshTimer) clearTimeout(viewportMetaRefreshTimer);
       if (viewportMetaRetryTimer) clearTimeout(viewportMetaRetryTimer);
       clearPlayerViewportOverrides();
-      if (isIPad && viewportMeta) {
-        setViewportMetaContent(BASE_VIEWPORT_CONTENT);
+      if (isIOS && viewportMeta) {
+        setViewportMetaContent(
+          isIPad ? BASE_VIEWPORT_CONTENT : INITIAL_VIEWPORT_CONTENT,
+          { forceReparse: true }
+        );
       }
       window.removeEventListener('resize', onResize);
       window.removeEventListener('orientationchange', onOrientation);
