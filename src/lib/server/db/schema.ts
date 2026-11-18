@@ -62,6 +62,22 @@ export const gridUrls = pgTable(
   (table) => [unique('grid_urls_grid_id_slot_unique').on(table.gridId, table.slot)]
 );
 
+export const publicGrids = pgTable(
+  'public_grids',
+  {
+    id: text('id').primaryKey(),
+    gridId: text('grid_id')
+      .notNull()
+      .unique()
+      .references(() => grids.id, { onDelete: 'cascade' }),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow()
+  },
+  (table) => [index('public_grids_user_id_idx').on(table.userId)]
+);
+
 export type UserRow = typeof users.$inferSelect;
 export type NewUserRow = typeof users.$inferInsert;
 export type UserSessionRow = typeof userSessions.$inferSelect;
@@ -70,3 +86,5 @@ export type GridRow = typeof grids.$inferSelect;
 export type NewGridRow = typeof grids.$inferInsert;
 export type GridUrlRow = typeof gridUrls.$inferSelect;
 export type NewGridUrlRow = typeof gridUrls.$inferInsert;
+export type PublicGridRow = typeof publicGrids.$inferSelect;
+export type NewPublicGridRow = typeof publicGrids.$inferInsert;

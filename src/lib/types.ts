@@ -19,8 +19,14 @@ export interface Grid {
   userId?: string;
   name: string;
   feeds: FeedEntry[];
+  isPublic?: boolean;
   createdAt: string;
   updatedAt?: string | null;
+}
+
+export interface PublicGrid extends Grid {
+  ownerUsername: string;
+  isPublic: true;
 }
 
 export type ValidationResult =

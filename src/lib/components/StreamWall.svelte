@@ -19,6 +19,7 @@
   interface Props {
     grid: Grid;
     streamWallEl?: HTMLElement;
+    readOnly?: boolean;
     isModalOpen: () => boolean;
     onConfigureSlot: (paneIndex: number) => void;
     onLiveAudioChange: (paneIndex: number, nextFeed: FeedEntry) => void;
@@ -27,6 +28,7 @@
   let {
     grid,
     streamWallEl = $bindable(),
+    readOnly = false,
     isModalOpen,
     onConfigureSlot,
     onLiveAudioChange
@@ -306,9 +308,11 @@
           <p class="empty-pane-label">
             Pane {i + 1} ({SLOT_POSITIONS[i]}) — No feed URL provided
           </p>
-          <button type="button" class="empty-pane-btn" onclick={() => onConfigureSlot(i)}>
-            Add Feed URL
-          </button>
+          {#if !readOnly}
+            <button type="button" class="empty-pane-btn" onclick={() => onConfigureSlot(i)}>
+              Add Feed URL
+            </button>
+          {/if}
         </div>
       {/if}
     </div>

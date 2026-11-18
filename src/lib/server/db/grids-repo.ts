@@ -1,11 +1,11 @@
 import crypto from 'node:crypto';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
-import type { FeedEntry, Grid } from '$lib/types';
+import type { FeedEntry, Grid, PublicGrid } from '$lib/types';
 import { normalizeFeedEntry, normalizeFeedsList } from '$lib/youtube';
 import { getDb } from './index';
-import { grids, gridUrls, type GridRow, type GridUrlRow } from './schema';
+import { grids, gridUrls, publicGrids, users, type GridRow, type GridUrlRow } from './schema';
 
-function assembleGrid(row: GridRow, urlRows: GridUrlRow[]): Grid {
+function assembleGrid(row: GridRow, urlRows: GridUrlRow[], isPublic = false): Grid {
   const slotMap = new Map<number, FeedEntry>();
   for (const urlRow of urlRows) {
     if (urlRow.slot >= 0 && urlRow.slot < 4) {
@@ -29,9 +29,23 @@ function assembleGrid(row: GridRow, urlRows: GridUrlRow[]): Grid {
     userId: row.userId,
     name: row.name,
     feeds,
+    isPublic,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt ?? undefined
   };
+}
+
+function groupUrlsByGridId(allUrlRows: GridUrlRow[]): Map<string, GridUrlRow[]> {
+  const urlsByGridId = new Map<string, GridUrlRow[]>();
+  for (const urlRow of allUrlRows) {
+    let bucket = urlsByGridId.get(urlRow.gridId);
+    if (!bucket) {
+      bucket = [];
+      urlsByGridId.set(urlRow.gridId, bucket);
+    }
+    bucket.push(urlRow);
+  }
+  return urlsByGridId;
 }
 
 export async function listGrids(userId: string): Promise<Grid[]> {
@@ -45,23 +59,15 @@ export async function listGrids(userId: string): Promise<Grid[]> {
   if (gridRows.length === 0) return [];
 
   const gridIds = gridRows.map((row) => row.id);
-  const allUrlRows = await db
-    .select()
-    .from(gridUrls)
-    .where(inArray(gridUrls.gridId, gridIds))
-    .orderBy(asc(gridUrls.slot));
+  const [allUrlRows, publicRows] = await Promise.all([
+    db.select().from(gridUrls).where(inArray(gridUrls.gridId, gridIds)).orderBy(asc(gridUrls.slot)),
+    db.select({ gridId: publicGrids.gridId }).from(publicGrids).where(inArray(publicGrids.gridId, gridIds))
+  ]);
 
-  const urlsByGridId = new Map<string, GridUrlRow[]>();
-  for (const urlRow of allUrlRows) {
-    let bucket = urlsByGridId.get(urlRow.gridId);
-    if (!bucket) {
-      bucket = [];
-      urlsByGridId.set(urlRow.gridId, bucket);
-    }
-    bucket.push(urlRow);
-  }
+  const urlsByGridId = groupUrlsByGridId(allUrlRows);
+  const publicSet = new Set(publicRows.map((r) => r.gridId));
 
-  return gridRows.map((row) => assembleGrid(row, urlsByGridId.get(row.id) ?? []));
+  return gridRows.map((row) => assembleGrid(row, urlsByGridId.get(row.id) ?? [], publicSet.has(row.id)));
 }
 
 export async function getGridById(id: string, userId: string): Promise<Grid | null> {
@@ -73,16 +79,79 @@ export async function getGridById(id: string, userId: string): Promise<Grid | nu
     .limit(1);
   if (!row) return null;
 
+  const [urlRows, publicRows] = await Promise.all([
+    db.select().from(gridUrls).where(eq(gridUrls.gridId, id)).orderBy(asc(gridUrls.slot)),
+    db.select({ gridId: publicGrids.gridId }).from(publicGrids).where(eq(publicGrids.gridId, id)).limit(1)
+  ]);
+
+  return assembleGrid(row, urlRows, publicRows.length > 0);
+}
+
+export async function listPublicGrids(): Promise<PublicGrid[]> {
+  const db = await getDb();
+  const rows = await db
+    .select({
+      grid: grids,
+      ownerUsername: users.username
+    })
+    .from(publicGrids)
+    .innerJoin(grids, eq(publicGrids.gridId, grids.id))
+    .innerJoin(users, eq(publicGrids.userId, users.id))
+    .where(eq(users.role, 'admin'))
+    .orderBy(asc(grids.createdAt), asc(grids.id));
+
+  if (rows.length === 0) return [];
+
+  const gridIds = rows.map((r) => r.grid.id);
+  const allUrlRows = await db
+    .select()
+    .from(gridUrls)
+    .where(inArray(gridUrls.gridId, gridIds))
+    .orderBy(asc(gridUrls.slot));
+
+  const urlsByGridId = groupUrlsByGridId(allUrlRows);
+
+  return rows.map(({ grid, ownerUsername }) => ({
+    ...assembleGrid(grid, urlsByGridId.get(grid.id) ?? [], true),
+    isPublic: true,
+    ownerUsername
+  }));
+}
+
+export async function getPublicGridById(id: string): Promise<PublicGrid | null> {
+  const db = await getDb();
+  const [match] = await db
+    .select({
+      grid: grids,
+      ownerUsername: users.username
+    })
+    .from(publicGrids)
+    .innerJoin(grids, eq(publicGrids.gridId, grids.id))
+    .innerJoin(users, eq(publicGrids.userId, users.id))
+    .where(and(eq(publicGrids.gridId, id), eq(users.role, 'admin')))
+    .limit(1);
+
+  if (!match) return null;
+
   const urlRows = await db
     .select()
     .from(gridUrls)
     .where(eq(gridUrls.gridId, id))
     .orderBy(asc(gridUrls.slot));
 
-  return assembleGrid(row, urlRows);
+  return {
+    ...assembleGrid(match.grid, urlRows, true),
+    isPublic: true,
+    ownerUsername: match.ownerUsername
+  };
 }
 
-export async function createGrid(userId: string, name: string, feeds: FeedEntry[]): Promise<Grid> {
+export async function createGrid(
+  userId: string,
+  name: string,
+  feeds: FeedEntry[],
+  isPublic = false
+): Promise<Grid> {
   const db = await getDb();
   const gridId = crypto.randomUUID();
   const normalized = normalizeFeedsList(feeds);
@@ -112,17 +181,26 @@ export async function createGrid(userId: string, name: string, feeds: FeedEntry[
       )
       .returning();
 
+    if (isPublic) {
+      await tx.insert(publicGrids).values({
+        id: crypto.randomUUID(),
+        gridId,
+        userId
+      });
+    }
+
     return { insertedGrid: gridRow, insertedUrls: urlRows };
   });
 
-  return assembleGrid(insertedGrid, insertedUrls);
+  return assembleGrid(insertedGrid, insertedUrls, isPublic);
 }
 
 export async function updateGrid(
   id: string,
   userId: string,
   name: string,
-  feeds: FeedEntry[]
+  feeds: FeedEntry[],
+  isPublic?: boolean
 ): Promise<Grid | null> {
   const db = await getDb();
   const normalized = normalizeFeedsList(feeds);
@@ -161,10 +239,69 @@ export async function updateGrid(
       })
       .returning();
 
-    return { updatedGrid, upsertedUrls };
+    let nextIsPublic: boolean;
+    if (isPublic === true) {
+      await tx
+        .insert(publicGrids)
+        .values({ id: crypto.randomUUID(), gridId: id, userId })
+        .onConflictDoNothing();
+      nextIsPublic = true;
+    } else if (isPublic === false) {
+      await tx
+        .delete(publicGrids)
+        .where(and(eq(publicGrids.gridId, id), eq(publicGrids.userId, userId)));
+      nextIsPublic = false;
+    } else {
+      const existingPub = await tx
+        .select({ gridId: publicGrids.gridId })
+        .from(publicGrids)
+        .where(eq(publicGrids.gridId, id))
+        .limit(1);
+      nextIsPublic = existingPub.length > 0;
+    }
+
+    return { updatedGrid, upsertedUrls, isPublic: nextIsPublic };
   });
 
-  return result ? assembleGrid(result.updatedGrid, result.upsertedUrls) : null;
+  return result ? assembleGrid(result.updatedGrid, result.upsertedUrls, result.isPublic) : null;
+}
+
+export async function setGridPublic(
+  id: string,
+  userId: string,
+  isPublic: boolean
+): Promise<Grid | null> {
+  const db = await getDb();
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .select()
+      .from(grids)
+      .where(and(eq(grids.id, id), eq(grids.userId, userId)))
+      .limit(1);
+
+    if (!row) return null;
+
+    if (isPublic) {
+      await tx
+        .insert(publicGrids)
+        .values({ id: crypto.randomUUID(), gridId: id, userId })
+        .onConflictDoNothing();
+    } else {
+      await tx
+        .delete(publicGrids)
+        .where(and(eq(publicGrids.gridId, id), eq(publicGrids.userId, userId)));
+    }
+
+    const urlRows = await tx
+      .select()
+      .from(gridUrls)
+      .where(eq(gridUrls.gridId, id))
+      .orderBy(asc(gridUrls.slot));
+
+    return assembleGrid(row, urlRows, isPublic);
+  });
+
+  return updated;
 }
 
 export async function deleteGrid(id: string, userId: string): Promise<boolean> {
