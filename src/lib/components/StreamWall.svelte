@@ -43,6 +43,9 @@
   ]);
   let paneUnmuted = $state([false, false, false, false]);
   const syncStates = new WeakMap<HTMLIFrameElement, IframeAudioSyncState>();
+  // Keep each mounted iframe's src fixed for a given (grid, videoId) so mute/volume changes
+  // never rewrite the src attribute and force the YouTube player to reload.
+  const stableEmbedUrls = new Map<number, { key: string; url: string }>();
 
   function getNormalizedFeed(idx: number): FeedEntry {
     return normalizeFeedEntry(grid.feeds?.[idx]);
@@ -50,6 +53,25 @@
 
   function getPaneVideoId(idx: number): string {
     return extractYouTubeId(getNormalizedFeed(idx).url) || '';
+  }
+
+  function getStableEmbedUrl(idx: number, videoId: string): string | null {
+    if (!videoId) {
+      stableEmbedUrls.delete(idx);
+      return null;
+    }
+    const cacheKey = `${grid.id}:${videoId}`;
+    const cached = stableEmbedUrls.get(idx);
+    if (cached && cached.key === cacheKey) {
+      return cached.url;
+    }
+    const url = buildEmbedUrl(getNormalizedFeed(idx), platform.isIOS);
+    if (!url) {
+      stableEmbedUrls.delete(idx);
+      return null;
+    }
+    stableEmbedUrls.set(idx, { key: cacheKey, url });
+    return url;
   }
 
   function sendYouTubeAudioCommands(iframe: HTMLIFrameElement, feed: FeedEntry) {
@@ -223,10 +245,8 @@
         continue;
       }
       state.feed = feed;
-      if (feed.muted || feed.volume === 0) {
-        state.userUnmuted = false;
-        paneUnmuted[i] = false;
-      }
+      state.userUnmuted = !(platform.isIOS || feed.muted || feed.volume === 0);
+      paneUnmuted[i] = state.userUnmuted;
       sendYouTubeAudioCommands(iframe, feed);
       setTimeout(() => sendYouTubeAudioCommands(iframe, feed), 150);
     }
@@ -243,8 +263,7 @@
 <div bind:this={streamWallEl} id="stream-wall" class="stream-wall">
   {#each [0, 1, 2, 3] as i (i)}
     {@const videoId = getPaneVideoId(i)}
-    {@const feed = getNormalizedFeed(i)}
-    {@const embedUrl = buildEmbedUrl(feed, platform.isIOS)}
+    {@const embedUrl = getStableEmbedUrl(i, videoId)}
     <div class="stream-pane" data-video-id={videoId}>
       {#if embedUrl}
         {#key videoId}
