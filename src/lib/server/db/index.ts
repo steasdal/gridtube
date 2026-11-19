@@ -3,12 +3,13 @@ import fs from 'node:fs/promises';
 import fsSync from 'node:fs';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
-import { asc, count, isNull, sql } from 'drizzle-orm';
+import { asc, count, gt, isNull, sql } from 'drizzle-orm';
 import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { migrate as migratePg } from 'drizzle-orm/node-postgres/migrator';
 import { drizzle as drizzlePglite, type PgliteDatabase } from 'drizzle-orm/pglite';
 import { migrate as migratePglite } from 'drizzle-orm/pglite/migrator';
 import { Pool } from 'pg';
+import { logger } from '$lib/server/logger';
 import { generateInitialAdminPassword, hashPassword } from '$lib/server/password';
 import type { Grid } from '$lib/types';
 import { normalizeFeedsList } from '$lib/youtube';
@@ -52,6 +53,24 @@ interface DbContext {
   db: AppDatabase;
   driver: 'postgres' | 'pglite';
   target: string;
+  pool: Pool | null;
+}
+
+export interface DbMetricsSnapshot {
+  driver: 'postgres' | 'pglite';
+  up: boolean;
+  pool: {
+    total: number;
+    idle: number;
+    waiting: number;
+  } | null;
+  counts: {
+    adminUsers: number;
+    standardUsers: number;
+    activeSessions: number;
+    grids: number;
+    publicGrids: number;
+  } | null;
 }
 
 let dbContextPromise: Promise<DbContext> | null = null;
@@ -160,12 +179,12 @@ async function seedOrImportInitialGrids(
           }));
         if (items.length > 0) {
           await insertGridsWithUrls(db, items, ownerUserId);
-          console.info(`Imported ${items.length} grid(s) from legacy ${legacyFile}`);
+          logger.info('db.legacy_import.completed', { count: items.length, legacyFile });
         }
       }
       return;
     } catch (err) {
-      console.error(`Failed to import legacy grids from ${legacyFile}:`, err);
+      logger.error('db.legacy_import.failed', { legacyFile, err });
     }
   }
 
@@ -195,8 +214,8 @@ async function createDbContext(): Promise<DbContext> {
     const db = pgDb as unknown as AppDatabase;
     await bootstrapDatabaseState(db, dataDir);
     const target = redactDatabaseUrl(databaseUrl);
-    console.info(`GridTube database ready (postgres: ${target})`);
-    return { db, driver: 'postgres', target };
+    logger.info('db.ready', { driver: 'postgres', target });
+    return { db, driver: 'postgres', target, pool };
   }
 
   const pgDataDir = path.join(dataDir, 'pgdata');
@@ -206,8 +225,8 @@ async function createDbContext(): Promise<DbContext> {
   const db = drizzlePglite(client, { schema });
   await migratePglite(db, { migrationsFolder });
   await bootstrapDatabaseState(db, dataDir);
-  console.info(`GridTube database ready (pglite: ${pgDataDir})`);
-  return { db, driver: 'pglite', target: pgDataDir };
+  logger.info('db.ready', { driver: 'pglite', target: pgDataDir });
+  return { db, driver: 'pglite', target: pgDataDir, pool: null };
 }
 
 export async function initDatabase(): Promise<DbContext> {
@@ -228,4 +247,62 @@ export async function getDb(): Promise<AppDatabase> {
 export async function getDatabaseHealth(): Promise<{ driver: 'postgres' | 'pglite'; target: string }> {
   const ctx = await initDatabase();
   return { driver: ctx.driver, target: ctx.target };
+}
+
+export async function getDbMetricsSnapshot(): Promise<DbMetricsSnapshot> {
+  const ctx = await initDatabase();
+  const poolStats = ctx.pool
+    ? {
+        total: ctx.pool.totalCount,
+        idle: ctx.pool.idleCount,
+        waiting: ctx.pool.waitingCount
+      }
+    : null;
+
+  try {
+    const nowIso = new Date().toISOString();
+    const [userRoleRows, sessionRows, gridRows, publicGridRows] = await Promise.all([
+      ctx.db
+        .select({ role: schema.users.role, value: count() })
+        .from(schema.users)
+        .groupBy(schema.users.role),
+      ctx.db
+        .select({ value: count() })
+        .from(schema.userSessions)
+        .where(gt(schema.userSessions.expiresAt, nowIso)),
+      ctx.db.select({ value: count() }).from(schema.grids),
+      ctx.db.select({ value: count() }).from(schema.publicGrids)
+    ]);
+
+    let adminUsers = 0;
+    let standardUsers = 0;
+    for (const row of userRoleRows) {
+      if (row.role === 'admin') {
+        adminUsers = Number(row.value);
+      } else {
+        standardUsers += Number(row.value);
+      }
+    }
+
+    return {
+      driver: ctx.driver,
+      up: true,
+      pool: poolStats,
+      counts: {
+        adminUsers,
+        standardUsers,
+        activeSessions: Number(sessionRows[0]?.value ?? 0),
+        grids: Number(gridRows[0]?.value ?? 0),
+        publicGrids: Number(publicGridRows[0]?.value ?? 0)
+      }
+    };
+  } catch (err) {
+    logger.error('metrics.db_snapshot.failed', { err });
+    return {
+      driver: ctx.driver,
+      up: false,
+      pool: poolStats,
+      counts: null
+    };
+  }
 }

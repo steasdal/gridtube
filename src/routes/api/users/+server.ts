@@ -3,6 +3,7 @@ import { validatePassword, validateUserRole, validateUsername } from '$lib/auth'
 import { requireApiAdmin } from '$lib/server/auth';
 import { createUser, listOtherUsers } from '$lib/server/db/users-repo';
 import { jsonNoStore, readJsonBody } from '$lib/server/http';
+import { logger } from '$lib/server/logger';
 
 export const GET: RequestHandler = async ({ locals }) => {
   const auth = requireApiAdmin(locals);
@@ -12,7 +13,7 @@ export const GET: RequestHandler = async ({ locals }) => {
     const otherUsers = await listOtherUsers(auth.user.id);
     return jsonNoStore({ users: otherUsers });
   } catch (err) {
-    console.error('GET /api/users failed:', err);
+    logger.error('api.users.list.failed', { requestId: locals.requestId, userId: auth.user.id, err });
     return jsonNoStore({ error: 'Internal server error' }, 500);
   }
 };
@@ -50,9 +51,16 @@ export const POST: RequestHandler = async ({ locals, request }) => {
     if (!result.ok) {
       return jsonNoStore({ error: result.error }, result.status);
     }
+    logger.info('admin.user.created', {
+      requestId: locals.requestId,
+      actorUserId: auth.user.id,
+      targetUserId: result.data.id,
+      targetUsername: result.data.username,
+      targetRole: result.data.role
+    });
     return jsonNoStore({ user: result.data }, 201);
   } catch (err) {
-    console.error('POST /api/users failed:', err);
+    logger.error('api.users.create.failed', { requestId: locals.requestId, userId: auth.user.id, err });
     return jsonNoStore({ error: 'Internal server error' }, 500);
   }
 };

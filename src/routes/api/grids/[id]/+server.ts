@@ -2,6 +2,8 @@ import type { RequestHandler } from './$types';
 import { requireApiUser } from '$lib/server/auth';
 import { deleteGrid, getGridById, updateGrid } from '$lib/server/db/grids-repo';
 import { jsonNoStore, readJsonBody } from '$lib/server/http';
+import { logger } from '$lib/server/logger';
+import { recordGridMutation } from '$lib/server/metrics';
 import { validateGridPayload } from '$lib/youtube';
 
 export const GET: RequestHandler = async ({ locals, params }) => {
@@ -55,9 +57,10 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
     if (!updated) {
       return jsonNoStore({ error: 'Grid not found.' }, 404);
     }
+    recordGridMutation('update');
     return jsonNoStore(updated);
   } catch (err) {
-    console.error('PUT /api/grids/:id failed:', err);
+    logger.error('api.grids.update.failed', { requestId: locals.requestId, userId: auth.user.id, gridId: id, err });
     return jsonNoStore({ error: 'Internal server error' }, 500);
   }
 };
@@ -76,9 +79,11 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
     if (!deleted) {
       return jsonNoStore({ error: 'Grid not found.' }, 404);
     }
+    recordGridMutation('delete');
+    logger.info('grid.deleted', { requestId: locals.requestId, userId: auth.user.id, gridId: id });
     return jsonNoStore({ deleted: id });
   } catch (err) {
-    console.error('DELETE /api/grids/:id failed:', err);
+    logger.error('api.grids.delete.failed', { requestId: locals.requestId, userId: auth.user.id, gridId: id, err });
     return jsonNoStore({ error: 'Internal server error' }, 500);
   }
 };

@@ -87,12 +87,12 @@ async function loginAs(baseUrl, username, password) {
   return { res, cookie: extractCookiePair(res.headers['set-cookie']) };
 }
 
-async function startServer(port, dataDir) {
+async function startServer(port, dataDir, extraEnv = {}) {
   const baseUrl = `http://127.0.0.1:${port}`;
   let logs = '';
   const proc = spawn(process.execPath, [BUILD_ENTRY], {
     cwd: REPO_ROOT,
-    env: { ...process.env, PORT: String(port), DATA_DIR: dataDir },
+    env: { ...process.env, PORT: String(port), DATA_DIR: dataDir, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
@@ -882,5 +882,116 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
       method: 'DELETE',
       cookie: adminCookie
     });
+  });
+
+  it('exposes internal Prometheus /metrics on METRICS_PORT and emits structured JSON logs', async () => {
+    const metricsDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gridtube-metrics-'));
+    const appPort = PORT + 5;
+    const metricsPort = PORT + 6;
+    const started = await startServer(appPort, metricsDataDir, {
+      METRICS_PORT: String(metricsPort),
+      METRICS_HOST: '127.0.0.1',
+      METRICS_DB_CACHE_MS: '0'
+    });
+
+    try {
+      const appUrl = started.baseUrl;
+      const metricsBaseUrl = `http://127.0.0.1:${metricsPort}`;
+
+      // Main app port must NOT expose /metrics publicly
+      const publicMetrics = await requestUrl(appUrl, '/metrics');
+      assert.equal(publicMetrics.status, 404);
+
+      // Unknown path on metrics port returns 404
+      const metricsUnknown = await requestUrl(metricsBaseUrl, '/not-metrics');
+      assert.equal(metricsUnknown.status, 404);
+
+      // Generate auth failure, auth success, unauthorized API hit, grid mutation, and grid view
+      const badLogin = await loginAs(appUrl, 'admin', 'wrong-password-123');
+      assert.equal(badLogin.status ?? badLogin.res.status, 401);
+
+      const unauthGrids = await requestUrl(appUrl, '/api/grids');
+      assert.equal(unauthGrids.status, 401);
+
+      const { res: loginRes, cookie } = await loginAs(appUrl, 'admin', started.initialAdminPassword);
+      assert.equal(loginRes.status, 200);
+
+      const created = await requestUrl(appUrl, '/api/grids', {
+        method: 'POST',
+        cookie,
+        body: {
+          name: 'Metrics Wall',
+          feeds: [{ url: 'https://www.youtube.com/watch?v=4XYbh4Pegzw', volume: 80, muted: false }],
+          isPublic: true
+        }
+      });
+      assert.equal(created.status, 201);
+
+      const privateView = await requestUrl(appUrl, `/grid/${encodeURIComponent(created.json.id)}`, {
+        cookie
+      });
+      assert.equal(privateView.status, 200);
+
+      const publicView = await requestUrl(appUrl, `/grid/${encodeURIComponent(created.json.id)}`);
+      assert.equal(publicView.status, 200);
+
+      // Scrape internal /metrics endpoint
+      const scrape = await requestUrl(metricsBaseUrl, '/metrics');
+      assert.equal(scrape.status, 200);
+      assert.match(String(scrape.headers['content-type'] || ''), /text\/plain/i);
+
+      const body = scrape.raw;
+      assert.match(body, /gridtube_build_info\{[^}]*driver="pglite"[^}]*\}\s+1/);
+      assert.match(body, /gridtube_db_up\s+1/);
+      assert.match(body, /gridtube_users_total\{role="admin"\}\s+1/);
+      assert.match(body, /gridtube_sessions_active\s+1/);
+      assert.match(body, /gridtube_grids_total\s+2/);
+      assert.match(body, /gridtube_public_grids_total\s+1/);
+      assert.match(body, /gridtube_auth_logins_total\{result="success"\}\s+1/);
+      assert.match(body, /gridtube_auth_logins_total\{result="failure"\}\s+1/);
+      assert.match(body, /gridtube_auth_denied_total\{route="\/api\/grids",status_code="401"\}\s+1/);
+      assert.match(body, /gridtube_grid_views_total\{visibility="private"\}\s+1/);
+      assert.match(body, /gridtube_grid_views_total\{visibility="public"\}\s+1/);
+      assert.match(body, /gridtube_grid_mutations_total\{action="create"\}\s+1/);
+      assert.match(body, /gridtube_grid_mutations_total\{action="publish"\}\s+1/);
+      assert.match(body, /gridtube_http_requests_total\{[^}]*route="\/grid\/\[id\]"[^}]*\}/);
+      assert.match(body, /gridtube_http_request_duration_seconds_bucket\{/);
+      assert.match(body, /nodejs_version_info\{/);
+
+      // Verify structured JSON log entries were emitted without leaking passwords
+      const logLines = started
+        .getLogs()
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('{') && line.endsWith('}'));
+      const parsedLogs = logLines.map((line) => JSON.parse(line));
+
+      assert.ok(
+        parsedLogs.some((entry) => entry.msg === 'metrics.server.listening' && entry.port === metricsPort),
+        'Expected structured metrics.server.listening log'
+      );
+      assert.ok(
+        parsedLogs.some((entry) => entry.msg === 'auth.login.succeeded' && entry.username === 'admin'),
+        'Expected structured auth.login.succeeded log'
+      );
+      assert.ok(
+        parsedLogs.some((entry) => entry.msg === 'auth.login.failed' && entry.username === 'admin'),
+        'Expected structured auth.login.failed log'
+      );
+      assert.ok(
+        parsedLogs.some(
+          (entry) => entry.msg === 'http.request' && entry.route === '/api/grids' && entry.status === 201
+        ),
+        'Expected structured http.request log for POST /api/grids'
+      );
+      for (const entry of parsedLogs) {
+        const serialized = JSON.stringify(entry);
+        assert.doesNotMatch(serialized, /wrong-password-123/);
+        assert.ok(!serialized.includes(started.initialAdminPassword));
+      }
+    } finally {
+      await stopProcess(started.proc);
+      fs.rmSync(metricsDataDir, { recursive: true, force: true });
+    }
   });
 });

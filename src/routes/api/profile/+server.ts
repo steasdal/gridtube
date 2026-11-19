@@ -3,6 +3,7 @@ import { validatePassword, validateUsername } from '$lib/auth';
 import { requireApiUser } from '$lib/server/auth';
 import { updateOwnProfile } from '$lib/server/db/users-repo';
 import { jsonNoStore, readJsonBody } from '$lib/server/http';
+import { logger } from '$lib/server/logger';
 
 export const PUT: RequestHandler = async ({ locals, request }) => {
   const auth = requireApiUser(locals);
@@ -56,9 +57,15 @@ export const PUT: RequestHandler = async ({ locals, request }) => {
     if (!result.ok) {
       return jsonNoStore({ error: result.error }, result.status);
     }
+    logger.info('profile.updated', {
+      requestId: locals.requestId,
+      userId: auth.user.id,
+      usernameChanged: Boolean(nextUsername && nextUsername !== auth.user.username),
+      passwordChanged: Boolean(nextPassword)
+    });
     return jsonNoStore({ user: result.data });
   } catch (err) {
-    console.error('PUT /api/profile failed:', err);
+    logger.error('api.profile.update.failed', { requestId: locals.requestId, userId: auth.user.id, err });
     return jsonNoStore({ error: 'Internal server error' }, 500);
   }
 };

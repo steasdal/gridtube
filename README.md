@@ -109,6 +109,10 @@ GridTube uses token-based authentication persisted in PostgreSQL/PGlite (`user_s
 | `DATA_DIR` | `./data` (`/data` in Docker/K8s) | Directory for embedded `PGlite` (`pgdata/`) and legacy `grids.json` import |
 | `DATABASE_URL` | *Unset* | PostgreSQL connection string; when unset, embedded `PGlite` is used |
 | `MIGRATIONS_DIR` | `./drizzle` | Path to Drizzle SQL migrations executed automatically on startup |
+| `METRICS_PORT` | *Unset* | Optional internal HTTP port exposing Prometheus `/metrics` (disabled when unset) |
+| `METRICS_HOST` | `0.0.0.0` | Bind address for the internal Prometheus `/metrics` listener |
+| `METRICS_DB_CACHE_MS` | `10000` | Cache TTL (ms) for database-backed state gauges refreshed on `/metrics` scrapes |
+| `LOG_LEVEL` | `info` | Structured JSON log level (`debug`, `info`, `warn`, `error`, `silent`) |
 
 ---
 
@@ -150,6 +154,8 @@ GridTube is a **SvelteKit 3 / Svelte 5** TypeScript application compiled with `@
 │       │   │   ├── grids-repo.ts   # Grid, slot URL & public-grid queries/mutations
 │       │   │   └── users-repo.ts   # User CRUD & lookup queries
 │       │   ├── auth.ts             # Cookie/Bearer token auth, sliding TTL & RBAC guards
+│       │   ├── logger.ts           # Structured JSON logger to stdout/stderr (LOG_LEVEL)
+│       │   ├── metrics.ts          # Prometheus registry (@prometheus-io/client) & METRICS_PORT server
 │       │   ├── password.ts         # Node crypto.scrypt hashing & timing-safe verification
 │       │   ├── http.ts             # Cache-Control: no-store JSON responses & 64 KB body cap
 │       │   └── version.ts          # Reads version.yml at startup
