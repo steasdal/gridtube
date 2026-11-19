@@ -3,6 +3,7 @@ import { validatePassword, validateUserRole, validateUsername } from '$lib/auth'
 import { requireApiAdmin } from '$lib/server/auth';
 import { deleteManagedUser, updateManagedUser } from '$lib/server/db/users-repo';
 import { jsonNoStore, readJsonBody } from '$lib/server/http';
+import { logger } from '$lib/server/logger';
 
 export const PUT: RequestHandler = async ({ locals, params, request }) => {
   const auth = requireApiAdmin(locals);
@@ -53,9 +54,22 @@ export const PUT: RequestHandler = async ({ locals, params, request }) => {
     if (!result.ok) {
       return jsonNoStore({ error: result.error }, result.status);
     }
+    logger.info('admin.user.updated', {
+      requestId: locals.requestId,
+      actorUserId: auth.user.id,
+      targetUserId: targetId,
+      targetUsername: result.data.username,
+      targetRole: result.data.role,
+      passwordReset: Boolean(nextPassword)
+    });
     return jsonNoStore({ user: result.data });
   } catch (err) {
-    console.error('PUT /api/users/:id failed:', err);
+    logger.error('api.users.update.failed', {
+      requestId: locals.requestId,
+      actorUserId: auth.user.id,
+      targetUserId: targetId,
+      err
+    });
     return jsonNoStore({ error: 'Internal server error' }, 500);
   }
 };
@@ -77,9 +91,19 @@ export const DELETE: RequestHandler = async ({ locals, params }) => {
     if (!deleted) {
       return jsonNoStore({ error: 'User not found.' }, 404);
     }
+    logger.info('admin.user.deleted', {
+      requestId: locals.requestId,
+      actorUserId: auth.user.id,
+      targetUserId: targetId
+    });
     return jsonNoStore({ deleted: targetId });
   } catch (err) {
-    console.error('DELETE /api/users/:id failed:', err);
+    logger.error('api.users.delete.failed', {
+      requestId: locals.requestId,
+      actorUserId: auth.user.id,
+      targetUserId: targetId,
+      err
+    });
     return jsonNoStore({ error: 'Internal server error' }, 500);
   }
 };

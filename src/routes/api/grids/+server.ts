@@ -2,6 +2,8 @@ import type { RequestHandler } from './$types';
 import { requireApiUser } from '$lib/server/auth';
 import { createGrid, listGrids } from '$lib/server/db/grids-repo';
 import { jsonNoStore, readJsonBody } from '$lib/server/http';
+import { logger } from '$lib/server/logger';
+import { recordGridMutation } from '$lib/server/metrics';
 import { validateGridPayload } from '$lib/youtube';
 
 export const GET: RequestHandler = async ({ locals }) => {
@@ -12,7 +14,7 @@ export const GET: RequestHandler = async ({ locals }) => {
     const allGrids = await listGrids(auth.user.id);
     return jsonNoStore(allGrids);
   } catch (err) {
-    console.error('GET /api/grids failed:', err);
+    logger.error('api.grids.list.failed', { requestId: locals.requestId, userId: auth.user.id, err });
     return jsonNoStore({ error: 'Internal server error' }, 500);
   }
 };
@@ -42,9 +44,19 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 
   try {
     const created = await createGrid(auth.user.id, validated.name, validated.feeds, isPublic);
+    recordGridMutation('create');
+    if (isPublic) {
+      recordGridMutation('publish');
+    }
+    logger.info('grid.created', {
+      requestId: locals.requestId,
+      userId: auth.user.id,
+      gridId: created.id,
+      isPublic
+    });
     return jsonNoStore(created, 201);
   } catch (err) {
-    console.error('POST /api/grids failed:', err);
+    logger.error('api.grids.create.failed', { requestId: locals.requestId, userId: auth.user.id, err });
     return jsonNoStore({ error: 'Internal server error' }, 500);
   }
 };

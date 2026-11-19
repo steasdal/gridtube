@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.16",
+    "@prometheus-io/client": "^0.16.1",
     "drizzle-orm": "^0.45.4",
     "pg": "^8.23.1"
   },
