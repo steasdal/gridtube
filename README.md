@@ -202,7 +202,9 @@ Every HTTP request passes through `handle()` in `src/hooks.server.ts` → `resol
 
 ## CI/CD Pipeline & GitOps Deployment
 
-GridTube uses a **Git-Flow** branching strategy paired with a multi-job GitHub Actions DAG ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) and automated **Flux CD GitOps** image promotion into [`steasdal/gitops`](https://github.com/steasdal/gitops).
+GridTube is self-hosted in my homelab on a highly available **Talos Linux Kubernetes cluster** running across three Proxmox VE servers—provisioned and bootstrapped with Terraform in [`steasdal/kubernetes-terraform`](https://github.com/steasdal/kubernetes-terraform). Both the dev (`grid-dev.teasdale.dev`) and production (`grid.teasdale.dev`) environments run on this cluster and are continuously reconciled by **Flux CD** from [`steasdal/gitops`](https://github.com/steasdal/gitops).
+
+Releases follow a **Git-Flow** branching strategy paired with a multi-job GitHub Actions DAG ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) that validates changes, publishes multi-arch container images to GHCR, and automatically promotes image tags into the GitOps repository:
 
 ```mermaid
 flowchart LR
