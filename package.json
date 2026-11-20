@@ -1,6 +1,6 @@
 {
   "name": "gridtube",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "Self-hosted 2x2 YouTube live stream grid SPA",
   "type": "module",
   "scripts": {
