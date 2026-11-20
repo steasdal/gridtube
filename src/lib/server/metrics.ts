@@ -138,7 +138,7 @@ export function recordHttpRequest(
   httpRequestDurationSeconds.observe(labels, durationSeconds);
 }
 
-export function recordLoginAttempt(result: 'success' | 'failure'): void {
+export function recordLoginAttempt(result: 'success' | 'failure' | 'rate_limited'): void {
   authLoginsTotal.inc({ result });
 }
 

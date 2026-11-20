@@ -994,4 +994,126 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
       fs.rmSync(metricsDataDir, { recursive: true, force: true });
     }
   });
+
+  it('enforces login rate limiting, prefers CF-Connecting-IP, and sets HTTP security headers', async () => {
+    const secDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gridtube-sec-'));
+    const appPort = PORT + 7;
+    const metricsPort = PORT + 8;
+    const started = await startServer(appPort, secDataDir, {
+      METRICS_PORT: String(metricsPort),
+      METRICS_HOST: '127.0.0.1',
+      METRICS_DB_CACHE_MS: '0',
+      LOGIN_RATE_LIMIT_MAX_ATTEMPTS: '3',
+      LOGIN_RATE_LIMIT_WINDOW_MS: '60000'
+    });
+
+    try {
+      const appUrl = started.baseUrl;
+      const metricsBaseUrl = `http://127.0.0.1:${metricsPort}`;
+
+      // 1. Verify HTTP security headers & nonce-based CSP on HTML pages
+      const homeHttp = await requestUrl(appUrl, '/');
+      assert.equal(homeHttp.status, 200);
+      assert.equal(homeHttp.headers['x-content-type-options'], 'nosniff');
+      assert.equal(homeHttp.headers['x-frame-options'], 'DENY');
+      assert.equal(homeHttp.headers['referrer-policy'], 'strict-origin-when-cross-origin');
+      assert.match(String(homeHttp.headers['permissions-policy'] || ''), /camera=\(\)/);
+      // HSTS must NOT be sent on plain HTTP
+      assert.equal(homeHttp.headers['strict-transport-security'], undefined);
+      const csp = String(homeHttp.headers['content-security-policy'] || '');
+      assert.match(csp, /default-src 'self'/);
+      assert.match(csp, /script-src 'self' 'nonce-/);
+      assert.match(csp, /frame-src https:\/\/www\.youtube\.com https:\/\/www\.youtube-nocookie\.com/);
+      assert.match(csp, /img-src 'self' data: https:\/\/i\.ytimg\.com/);
+      assert.match(csp, /frame-ancestors 'none'/);
+
+      // HSTS IS sent when behind HTTPS reverse proxy
+      const homeHttps = await requestUrl(appUrl, '/', {
+        headers: { 'X-Forwarded-Proto': 'https' }
+      });
+      assert.equal(homeHttps.status, 200);
+      assert.match(
+        String(homeHttps.headers['strict-transport-security'] || ''),
+        /max-age=31536000/
+      );
+
+      // 2. Spoofing X-Forwarded-For cannot bypass CF-Connecting-IP rate limiting
+      for (let i = 1; i <= 3; i++) {
+        const res = await requestUrl(appUrl, '/api/auth/login', {
+          method: 'POST',
+          headers: {
+            'CF-Connecting-IP': '198.51.100.42',
+            'X-Forwarded-For': `203.0.113.${i}`
+          },
+          body: { username: `ghost-${i}`, password: 'wrong-password-123' }
+        });
+        assert.equal(res.status, 401);
+      }
+
+      // 4th attempt from the same CF-Connecting-IP (even with a new spoofed XFF) gets 429
+      const ipBlocked = await requestUrl(appUrl, '/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'CF-Connecting-IP': '198.51.100.42',
+          'X-Forwarded-For': '203.0.113.99'
+        },
+        body: { username: 'admin', password: started.initialAdminPassword }
+      });
+      assert.equal(ipBlocked.status, 429);
+      assert.ok(Number(ipBlocked.headers['retry-after']) >= 1);
+
+      // 3. Per-username rate limiting triggers across distinct IPs
+      for (let i = 1; i <= 3; i++) {
+        const res = await requestUrl(appUrl, '/api/auth/login', {
+          method: 'POST',
+          headers: { 'CF-Connecting-IP': `198.51.100.${100 + i}` },
+          body: { username: 'target-user', password: 'wrong-password-123' }
+        });
+        assert.equal(res.status, 401);
+      }
+      const userBlocked = await requestUrl(appUrl, '/api/auth/login', {
+        method: 'POST',
+        headers: { 'CF-Connecting-IP': '198.51.100.200' },
+        body: { username: 'TARGET-USER', password: 'wrong-password-123' }
+      });
+      assert.equal(userBlocked.status, 429);
+
+      // Legitimate login from a clean IP still succeeds
+      const cleanLogin = await requestUrl(appUrl, '/api/auth/login', {
+        method: 'POST',
+        headers: { 'CF-Connecting-IP': '198.51.100.250' },
+        body: { username: 'admin', password: started.initialAdminPassword }
+      });
+      assert.equal(cleanLogin.status, 200);
+
+      // 4. Verify metrics recorded rate_limited and logs captured real CF-Connecting-IP
+      const scrape = await requestUrl(metricsBaseUrl, '/metrics');
+      assert.equal(scrape.status, 200);
+      assert.match(scrape.raw, /gridtube_auth_logins_total\{result="rate_limited"\}\s+2/);
+
+      const parsedLogs = started
+        .getLogs()
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('{') && line.endsWith('}'))
+        .map((line) => JSON.parse(line));
+
+      assert.ok(
+        parsedLogs.some(
+          (entry) =>
+            entry.msg === 'auth.login.rate_limited' &&
+            entry.ip === '198.51.100.42' &&
+            entry.scope === 'ip'
+        ),
+        'Expected auth.login.rate_limited log attributed to real CF-Connecting-IP'
+      );
+      assert.ok(
+        !parsedLogs.some((entry) => entry.ip && String(entry.ip).startsWith('203.0.113.')),
+        'Spoofed X-Forwarded-For IP must not override CF-Connecting-IP in logs'
+      );
+    } finally {
+      await stopProcess(started.proc);
+      fs.rmSync(secDataDir, { recursive: true, force: true });
+    }
+  });
 });
