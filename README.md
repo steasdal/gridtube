@@ -113,6 +113,8 @@ GridTube uses token-based authentication persisted in PostgreSQL/PGlite (`user_s
 | `METRICS_HOST` | `0.0.0.0` | Bind address for the internal Prometheus `/metrics` listener |
 | `METRICS_DB_CACHE_MS` | `10000` | Cache TTL (ms) for database-backed state gauges refreshed on `/metrics` scrapes |
 | `LOG_LEVEL` | `info` | Structured JSON log level (`debug`, `info`, `warn`, `error`, `silent`) |
+| `LOGIN_RATE_LIMIT_MAX_ATTEMPTS` | `10` | Max failed login attempts per IP or username within the rate-limit window |
+| `LOGIN_RATE_LIMIT_WINDOW_MS` | `900000` | Sliding rate-limit window (ms) for failed login attempts (default: 15 minutes) |
 
 ---
 
@@ -157,6 +159,7 @@ GridTube is a **SvelteKit 3 / Svelte 5** TypeScript application compiled with `@
 │       │   ├── logger.ts           # Structured JSON logger to stdout/stderr (LOG_LEVEL)
 │       │   ├── metrics.ts          # Prometheus registry (@prometheus-io/client) & METRICS_PORT server
 │       │   ├── password.ts         # Node crypto.scrypt hashing & timing-safe verification
+│       │   ├── rate-limit.ts       # Bounded sliding-window per-IP & per-username login rate limiter
 │       │   ├── http.ts             # Cache-Control: no-store JSON responses & 64 KB body cap
 │       │   └── version.ts          # Reads version.yml at startup
 │       ├── client/                 # Browser-only modules

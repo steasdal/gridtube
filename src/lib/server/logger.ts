@@ -69,6 +69,10 @@ function emit(level: Exclude<LogLevel, 'silent'>, msg: string, fields?: Record<s
 }
 
 export function getClientIp(request: Request): string | undefined {
+  // Prefer Cloudflare's edge-set header when present so clients cannot spoof X-Forwarded-For.
+  const cfIp = request.headers.get('cf-connecting-ip')?.trim();
+  if (cfIp) return cfIp;
+
   const forwarded = request.headers.get('x-forwarded-for');
   if (forwarded) {
     const first = forwarded.split(',')[0]?.trim();
