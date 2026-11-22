@@ -268,3 +268,21 @@ export function startMetricsServer(): void {
   server.unref();
   metricsServer = server;
 }
+
+export async function stopMetricsServer(): Promise<void> {
+  const server = metricsServer;
+  if (!server) return;
+  metricsServer = null;
+
+  server.closeIdleConnections?.();
+  await new Promise<void>((resolve) => {
+    server.close((err) => {
+      if (err) {
+        logger.warn('metrics.server.close_failed', { err });
+      } else {
+        logger.info('metrics.server.closed');
+      }
+      resolve();
+    });
+  });
+}

@@ -132,7 +132,7 @@ function stopProcess(proc) {
         // Ignore if already exited
       }
       resolve();
-    }, 500);
+    }, 2000);
     proc.once('exit', () => {
       clearTimeout(forceTimer);
       resolve();
@@ -1111,6 +1111,29 @@ describe('GridTube SvelteKit + Drizzle + Auth Smoke Suite', () => {
         !parsedLogs.some((entry) => entry.ip && String(entry.ip).startsWith('203.0.113.')),
         'Spoofed X-Forwarded-For IP must not override CF-Connecting-IP in logs'
       );
+
+      // 5. Verify graceful shutdown drains cleanly and closes metrics server + database
+      await stopProcess(started.proc);
+      assert.equal(started.proc.exitCode, 0, 'Expected clean exit code 0 on SIGTERM');
+
+      const shutdownLogs = started
+        .getLogs()
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith('{') && line.endsWith('}'))
+        .map((line) => JSON.parse(line));
+
+      for (const expectedMsg of [
+        'server.shutdown.started',
+        'metrics.server.closed',
+        'db.closed',
+        'server.shutdown.completed'
+      ]) {
+        assert.ok(
+          shutdownLogs.some((entry) => entry.msg === expectedMsg),
+          `Expected "${expectedMsg}" log entry on SIGTERM`
+        );
+      }
     } finally {
       await stopProcess(started.proc);
       fs.rmSync(secDataDir, { recursive: true, force: true });
