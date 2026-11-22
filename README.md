@@ -108,6 +108,7 @@ GridTube uses token-based authentication persisted in PostgreSQL/PGlite (`user_s
 | `PORT` | `3000` (`8080` in Docker/K8s) | HTTP port for the Node server |
 | `DATA_DIR` | `./data` (`/data` in Docker/K8s) | Directory for embedded `PGlite` (`pgdata/`) and legacy `grids.json` import |
 | `DATABASE_URL` | *Unset* | PostgreSQL connection string; when unset, embedded `PGlite` is used |
+| `PG_POOL_MAX` | `10` | Maximum `pg` connection pool size per instance (`1`–`100`, PostgreSQL mode only) |
 | `MIGRATIONS_DIR` | `./drizzle` | Path to Drizzle SQL migrations executed automatically on startup |
 | `METRICS_PORT` | *Unset* | Optional internal HTTP port exposing Prometheus `/metrics` (disabled when unset) |
 | `METRICS_HOST` | `0.0.0.0` | Bind address for the internal Prometheus `/metrics` listener |
@@ -181,7 +182,7 @@ GridTube is a **SvelteKit 3 / Svelte 5** TypeScript application compiled with `@
 #### 1. Startup, Dual Database Driver & Schema
 On server startup, SvelteKit runs `init()` in `src/hooks.server.ts`, calling `initDatabase()` in `src/lib/server/db/index.ts`:
 - **Driver selection**: Connects to external PostgreSQL via `pg` (`drizzle-orm/node-postgres`) if `DATABASE_URL` is set; otherwise opens an embedded `PGlite` database at `$DATA_DIR/pgdata` (`drizzle-orm/pglite`).
-- **Auto-migrations & bootstrap**: Both drivers share the same Drizzle schema (`src/lib/server/db/schema.ts`) and automatically run pending SQL migrations from `./drizzle`. On a fresh database, the server generates an initial `admin` user (logging the one-time password to stdout), imports `$DATA_DIR/grids.json` if present, or seeds the default `choo-choos` grid.
+- **Auto-migrations & bootstrap**: Both drivers share the same Drizzle schema (`src/lib/server/db/schema.ts`) and automatically run pending SQL migrations from `./drizzle`. In PostgreSQL mode, migrations and initial bootstrap are serialized across concurrent replicas using a session-level `pg_advisory_lock`. On a fresh database, the server generates an initial `admin` user (logging the one-time password to stdout), imports `$DATA_DIR/grids.json` if present, or seeds the default `choo-choos` grid.
 
 The schema consists of five tables in `src/lib/server/db/schema.ts`:
 - `users` — user accounts (`username`, unique `username_lower`, `scrypt` `password_hash`, `role` of `'admin'` or `'user'`).
