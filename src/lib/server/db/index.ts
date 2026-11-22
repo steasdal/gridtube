@@ -72,6 +72,7 @@ interface DbContext {
   driver: 'postgres' | 'pglite';
   target: string;
   pool: Pool | null;
+  pgliteClient: PGlite | null;
 }
 
 export interface DbMetricsSnapshot {
@@ -310,7 +311,7 @@ async function createDbContext(): Promise<DbContext> {
     const db = pgDb as unknown as AppDatabase;
     const target = redactDatabaseUrl(databaseUrl);
     logger.info('db.ready', { driver: 'postgres', target, poolMax });
-    return { db, driver: 'postgres', target, pool };
+    return { db, driver: 'postgres', target, pool, pgliteClient: null };
   }
 
   const pgDataDir = path.join(dataDir, 'pgdata');
@@ -321,7 +322,7 @@ async function createDbContext(): Promise<DbContext> {
   await migratePglite(db, { migrationsFolder });
   await bootstrapDatabaseState(db, dataDir);
   logger.info('db.ready', { driver: 'pglite', target: pgDataDir });
-  return { db, driver: 'pglite', target: pgDataDir, pool: null };
+  return { db, driver: 'pglite', target: pgDataDir, pool: null, pgliteClient: client };
 }
 
 export async function initDatabase(): Promise<DbContext> {
@@ -332,6 +333,30 @@ export async function initDatabase(): Promise<DbContext> {
     });
   }
   return dbContextPromise;
+}
+
+export async function closeDatabase(): Promise<void> {
+  const pending = dbContextPromise;
+  if (!pending) return;
+  dbContextPromise = null;
+
+  let ctx: DbContext;
+  try {
+    ctx = await pending;
+  } catch {
+    return;
+  }
+
+  try {
+    if (ctx.pool) {
+      await ctx.pool.end();
+    } else if (ctx.pgliteClient) {
+      await ctx.pgliteClient.close();
+    }
+    logger.info('db.closed', { driver: ctx.driver });
+  } catch (err) {
+    logger.error('db.close.failed', { driver: ctx.driver, err });
+  }
 }
 
 export async function getDb(): Promise<AppDatabase> {

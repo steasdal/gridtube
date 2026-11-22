@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { Handle, HandleServerError, ServerInit } from '@sveltejs/kit/hooks';
 import { resolveRequestSession } from '$lib/server/auth';
-import { initDatabase } from '$lib/server/db';
+import { closeDatabase, initDatabase } from '$lib/server/db';
 import { getClientIp, logger } from '$lib/server/logger';
 import {
   decrementInFlightRequests,
@@ -9,14 +9,31 @@ import {
   recordAuthDenied,
   recordHttpRequest,
   setBuildInfo,
-  startMetricsServer
+  startMetricsServer,
+  stopMetricsServer
 } from '$lib/server/metrics';
 import { APP_VERSION } from '$lib/server/version';
+
+let shutdownHookRegistered = false;
+
+function registerShutdownHook(): void {
+  if (shutdownHookRegistered) return;
+  shutdownHookRegistered = true;
+
+  // Emitted by @sveltejs/adapter-node after in-flight HTTP requests drain on SIGTERM/SIGINT.
+  (process as NodeJS.EventEmitter).once('sveltekit:shutdown', (reason: unknown) => {
+    logger.info('server.shutdown.started', { reason: String(reason ?? 'unknown') });
+    void Promise.allSettled([stopMetricsServer(), closeDatabase()]).then(() => {
+      logger.info('server.shutdown.completed', { reason: String(reason ?? 'unknown') });
+    });
+  });
+}
 
 export const init: ServerInit = async () => {
   const ctx = await initDatabase();
   setBuildInfo(APP_VERSION, ctx.driver);
   startMetricsServer();
+  registerShutdownHook();
 };
 
 function getRouteLabel(routeId: string | null, pathname: string): string {
