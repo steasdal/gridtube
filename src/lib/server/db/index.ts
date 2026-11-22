@@ -8,7 +8,7 @@ import { drizzle as drizzlePg } from 'drizzle-orm/node-postgres';
 import { migrate as migratePg } from 'drizzle-orm/node-postgres/migrator';
 import { drizzle as drizzlePglite, type PgliteDatabase } from 'drizzle-orm/pglite';
 import { migrate as migratePglite } from 'drizzle-orm/pglite/migrator';
-import { Pool } from 'pg';
+import { Pool, type PoolClient } from 'pg';
 import { logger } from '$lib/server/logger';
 import { generateInitialAdminPassword, hashPassword } from '$lib/server/password';
 import type { Grid } from '$lib/types';
@@ -16,6 +16,13 @@ import { normalizeFeedsList } from '$lib/youtube';
 import * as schema from './schema';
 
 export type AppDatabase = PgliteDatabase<typeof schema>;
+
+// Two 32-bit signed integers ('GTUB', 1) used with pg_advisory_lock to serialize
+// schema migrations and initial bootstrap across concurrent replicas.
+const BOOTSTRAP_LOCK_CLASS_ID = 0x47545542;
+const BOOTSTRAP_LOCK_OBJ_ID = 1;
+const DEFAULT_PG_POOL_MAX = 10;
+const MAX_PG_POOL_MAX = 100;
 
 const DEFAULT_GRIDS: Grid[] = [
   {
@@ -39,6 +46,17 @@ function getMigrationsFolder(): string {
   return path.resolve(process.env.MIGRATIONS_DIR || path.join(process.cwd(), 'drizzle'));
 }
 
+function getPgPoolMax(): number {
+  const raw = process.env.PG_POOL_MAX?.trim();
+  if (!raw) return DEFAULT_PG_POOL_MAX;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > MAX_PG_POOL_MAX || String(parsed) !== raw) {
+    logger.warn('db.pool_max.invalid', { raw, fallback: DEFAULT_PG_POOL_MAX });
+    return DEFAULT_PG_POOL_MAX;
+  }
+  return parsed;
+}
+
 function redactDatabaseUrl(rawUrl: string): string {
   try {
     const parsed = new URL(rawUrl);
@@ -54,6 +72,7 @@ interface DbContext {
   driver: 'postgres' | 'pglite';
   target: string;
   pool: Pool | null;
+  pgliteClient: PGlite | null;
 }
 
 export interface DbMetricsSnapshot {
@@ -90,15 +109,28 @@ async function ensureInitialAdminUser(db: AppDatabase): Promise<string> {
   const initialPassword = generateInitialAdminPassword(16);
   const passwordHash = await hashPassword(initialPassword);
 
-  await db.insert(schema.users).values({
-    id: adminId,
-    username: 'admin',
-    usernameLower: 'admin',
-    passwordHash,
-    role: 'admin',
-    createdAt: new Date().toISOString(),
-    updatedAt: null
-  });
+  const inserted = await db
+    .insert(schema.users)
+    .values({
+      id: adminId,
+      username: 'admin',
+      usernameLower: 'admin',
+      passwordHash,
+      role: 'admin',
+      createdAt: new Date().toISOString(),
+      updatedAt: null
+    })
+    .onConflictDoNothing()
+    .returning({ id: schema.users.id });
+
+  if (inserted.length === 0) {
+    const racedAdmins = await db
+      .select({ id: schema.users.id, role: schema.users.role })
+      .from(schema.users)
+      .orderBy(asc(schema.users.createdAt));
+    const winner = racedAdmins.find((u) => u.role === 'admin') ?? racedAdmins[0];
+    if (winner) return winner.id;
+  }
 
   console.info(
     [
@@ -191,15 +223,70 @@ async function seedOrImportInitialGrids(
   await insertGridsWithUrls(db, DEFAULT_GRIDS, ownerUserId);
 }
 
+async function isGridsUserIdNullable(db: AppDatabase): Promise<boolean> {
+  const result = await db.execute(sql`
+    SELECT is_nullable
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'grids'
+      AND column_name = 'user_id'
+    LIMIT 1
+  `);
+  const rows = (result as { rows?: Array<{ is_nullable?: string }> }).rows ?? [];
+  return rows[0]?.is_nullable === 'YES';
+}
+
 async function bootstrapDatabaseState(db: AppDatabase, dataDir: string): Promise<void> {
   const adminUserId = await ensureInitialAdminUser(db);
 
   // Assign any pre-auth grids (where user_id is NULL after 0002 migration) to initial admin,
-  // then enforce NOT NULL on grids.user_id.
-  await db.update(schema.grids).set({ userId: adminUserId }).where(isNull(schema.grids.userId));
-  await db.execute(sql`ALTER TABLE "grids" ALTER COLUMN "user_id" SET NOT NULL`);
+  // then enforce NOT NULL on grids.user_id. Guarded so already-migrated DBs avoid taking an
+  // unnecessary ACCESS EXCLUSIVE lock on every replica boot.
+  if (await isGridsUserIdNullable(db)) {
+    await db.update(schema.grids).set({ userId: adminUserId }).where(isNull(schema.grids.userId));
+    await db.execute(sql`ALTER TABLE "grids" ALTER COLUMN "user_id" SET NOT NULL`);
+  }
 
   await seedOrImportInitialGrids(db, dataDir, adminUserId);
+}
+
+async function withPgBootstrapLock<T>(
+  pool: Pool,
+  fn: (client: PoolClient) => Promise<T>
+): Promise<T> {
+  const lockClient = await pool.connect();
+  let lockAcquired = false;
+  try {
+    await lockClient.query('SELECT pg_advisory_lock($1, $2)', [
+      BOOTSTRAP_LOCK_CLASS_ID,
+      BOOTSTRAP_LOCK_OBJ_ID
+    ]);
+    lockAcquired = true;
+    logger.debug('db.bootstrap_lock.acquired', {
+      classId: BOOTSTRAP_LOCK_CLASS_ID,
+      objId: BOOTSTRAP_LOCK_OBJ_ID
+    });
+    return await fn(lockClient);
+  } finally {
+    let releaseError: Error | undefined;
+    if (lockAcquired) {
+      try {
+        await lockClient.query('SELECT pg_advisory_unlock($1, $2)', [
+          BOOTSTRAP_LOCK_CLASS_ID,
+          BOOTSTRAP_LOCK_OBJ_ID
+        ]);
+        logger.debug('db.bootstrap_lock.released', {
+          classId: BOOTSTRAP_LOCK_CLASS_ID,
+          objId: BOOTSTRAP_LOCK_OBJ_ID
+        });
+      } catch (unlockErr) {
+        logger.warn('db.bootstrap_lock.unlock_failed', { err: unlockErr });
+        // Destroy the client so PostgreSQL immediately drops the session advisory lock.
+        releaseError = unlockErr instanceof Error ? unlockErr : new Error(String(unlockErr));
+      }
+    }
+    lockClient.release(releaseError);
+  }
 }
 
 async function createDbContext(): Promise<DbContext> {
@@ -208,14 +295,23 @@ async function createDbContext(): Promise<DbContext> {
   const databaseUrl = process.env.DATABASE_URL?.trim();
 
   if (databaseUrl) {
-    const pool = new Pool({ connectionString: databaseUrl });
+    const poolMax = getPgPoolMax();
+    const pool = new Pool({ connectionString: databaseUrl, max: poolMax });
+    try {
+      await withPgBootstrapLock(pool, async (lockClient) => {
+        const lockedPgDb = drizzlePg(lockClient, { schema });
+        await migratePg(lockedPgDb, { migrationsFolder });
+        await bootstrapDatabaseState(lockedPgDb as unknown as AppDatabase, dataDir);
+      });
+    } catch (err) {
+      await pool.end().catch(() => {});
+      throw err;
+    }
     const pgDb = drizzlePg(pool, { schema });
-    await migratePg(pgDb, { migrationsFolder });
     const db = pgDb as unknown as AppDatabase;
-    await bootstrapDatabaseState(db, dataDir);
     const target = redactDatabaseUrl(databaseUrl);
-    logger.info('db.ready', { driver: 'postgres', target });
-    return { db, driver: 'postgres', target, pool };
+    logger.info('db.ready', { driver: 'postgres', target, poolMax });
+    return { db, driver: 'postgres', target, pool, pgliteClient: null };
   }
 
   const pgDataDir = path.join(dataDir, 'pgdata');
@@ -226,7 +322,7 @@ async function createDbContext(): Promise<DbContext> {
   await migratePglite(db, { migrationsFolder });
   await bootstrapDatabaseState(db, dataDir);
   logger.info('db.ready', { driver: 'pglite', target: pgDataDir });
-  return { db, driver: 'pglite', target: pgDataDir, pool: null };
+  return { db, driver: 'pglite', target: pgDataDir, pool: null, pgliteClient: client };
 }
 
 export async function initDatabase(): Promise<DbContext> {
@@ -237,6 +333,30 @@ export async function initDatabase(): Promise<DbContext> {
     });
   }
   return dbContextPromise;
+}
+
+export async function closeDatabase(): Promise<void> {
+  const pending = dbContextPromise;
+  if (!pending) return;
+  dbContextPromise = null;
+
+  let ctx: DbContext;
+  try {
+    ctx = await pending;
+  } catch {
+    return;
+  }
+
+  try {
+    if (ctx.pool) {
+      await ctx.pool.end();
+    } else if (ctx.pgliteClient) {
+      await ctx.pgliteClient.close();
+    }
+    logger.info('db.closed', { driver: ctx.driver });
+  } catch (err) {
+    logger.error('db.close.failed', { driver: ctx.driver, err });
+  }
 }
 
 export async function getDb(): Promise<AppDatabase> {
