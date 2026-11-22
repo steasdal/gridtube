@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { Cookies, RequestEvent } from '@sveltejs/kit';
 import { and, eq, gt, ne } from 'drizzle-orm';
-import { getDb } from '$lib/server/db';
+import { getDb, type AppDatabase } from '$lib/server/db';
 import { userSessions, users } from '$lib/server/db/schema';
 import { jsonNoStore } from '$lib/server/http';
 import { toPublicUser } from '$lib/server/password';
@@ -84,8 +84,12 @@ export async function deleteSessionById(sessionId: string): Promise<void> {
   await db.delete(userSessions).where(eq(userSessions.id, sessionId));
 }
 
-export async function deleteSessionsForUser(userId: string, exceptSessionId?: string | null): Promise<void> {
-  const db = await getDb();
+export async function deleteSessionsForUser(
+  userId: string,
+  exceptSessionId?: string | null,
+  executor?: Pick<AppDatabase, 'delete'>
+): Promise<void> {
+  const db = executor ?? (await getDb());
   if (exceptSessionId) {
     await db
       .delete(userSessions)
