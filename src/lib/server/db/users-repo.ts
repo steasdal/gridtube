@@ -10,6 +10,16 @@ export type RepoResult<T> =
   | { ok: true; data: T }
   | { ok: false; status: number; error: string };
 
+function isUniqueViolation(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < 4 && current && typeof current === 'object'; depth++) {
+    const rec = current as { code?: unknown; cause?: unknown };
+    if (rec.code === '23505') return true;
+    current = rec.cause;
+  }
+  return false;
+}
+
 export async function authenticateUser(
   username: string,
   password: string
@@ -96,7 +106,14 @@ export async function createUser(
     updatedAt: null
   };
 
-  await db.insert(users).values(newUser);
+  try {
+    await db.insert(users).values(newUser);
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return { ok: false, status: 409, error: `Username "${cleanUsername}" is already taken.` };
+    }
+    throw err;
+  }
   return { ok: true, data: toPublicUser(newUser) };
 }
 
@@ -108,61 +125,71 @@ export async function updateManagedUser(
   const cleanUsername = updates.username.trim();
   const usernameLower = cleanUsername.toLowerCase();
 
-  const existingRows = await db
-    .select()
-    .from(users)
-    .where(eq(users.id, targetId))
-    .limit(1);
+  // Compute scrypt password hash outside the DB transaction to avoid holding locks during CPU work.
+  const hashedNewPassword = updates.password ? await hashPassword(updates.password) : null;
 
-  const existing = existingRows[0];
-  if (!existing) {
-    return { ok: false, status: 404, error: 'User not found.' };
+  try {
+    return await db.transaction(async (tx) => {
+      const existingRows = await tx
+        .select()
+        .from(users)
+        .where(eq(users.id, targetId))
+        .limit(1);
+
+      const existing = existingRows[0];
+      if (!existing) {
+        return { ok: false, status: 404, error: 'User not found.' };
+      }
+
+      const conflicting = await tx
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.usernameLower, usernameLower), ne(users.id, targetId)))
+        .limit(1);
+
+      if (conflicting.length > 0) {
+        return { ok: false, status: 409, error: `Username "${cleanUsername}" is already taken.` };
+      }
+
+      const now = new Date().toISOString();
+      const nextPasswordHash = hashedNewPassword ?? existing.passwordHash;
+
+      await tx
+        .update(users)
+        .set({
+          username: cleanUsername,
+          usernameLower,
+          role: updates.role,
+          passwordHash: nextPasswordHash,
+          updatedAt: now
+        })
+        .where(eq(users.id, targetId));
+
+      if (updates.role !== 'admin') {
+        await tx.delete(publicGrids).where(eq(publicGrids.userId, targetId));
+      }
+
+      if (hashedNewPassword || updates.role !== existing.role) {
+        await deleteSessionsForUser(targetId, null, tx);
+      }
+
+      return {
+        ok: true,
+        data: toPublicUser({
+          id: existing.id,
+          username: cleanUsername,
+          role: updates.role,
+          createdAt: existing.createdAt,
+          updatedAt: now
+        })
+      };
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return { ok: false, status: 409, error: `Username "${cleanUsername}" is already taken.` };
+    }
+    throw err;
   }
-
-  const conflicting = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(and(eq(users.usernameLower, usernameLower), ne(users.id, targetId)))
-    .limit(1);
-
-  if (conflicting.length > 0) {
-    return { ok: false, status: 409, error: `Username "${cleanUsername}" is already taken.` };
-  }
-
-  const now = new Date().toISOString();
-  const nextPasswordHash = updates.password
-    ? await hashPassword(updates.password)
-    : existing.passwordHash;
-
-  await db
-    .update(users)
-    .set({
-      username: cleanUsername,
-      usernameLower,
-      role: updates.role,
-      passwordHash: nextPasswordHash,
-      updatedAt: now
-    })
-    .where(eq(users.id, targetId));
-
-  if (updates.role !== 'admin') {
-    await db.delete(publicGrids).where(eq(publicGrids.userId, targetId));
-  }
-
-  if (updates.password || updates.role !== existing.role) {
-    await deleteSessionsForUser(targetId);
-  }
-
-  return {
-    ok: true,
-    data: toPublicUser({
-      id: existing.id,
-      username: cleanUsername,
-      role: updates.role,
-      createdAt: existing.createdAt,
-      updatedAt: now
-    })
-  };
 }
 
 export async function deleteManagedUser(targetId: string): Promise<boolean> {
@@ -184,70 +211,96 @@ export async function updateOwnProfile(
   }
 ): Promise<RepoResult<AuthUser>> {
   const db = await getDb();
-  const existingRows = await db
+  const initialRows = await db
     .select()
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
 
-  const existing = existingRows[0];
-  if (!existing) {
+  const initial = initialRows[0];
+  if (!initial) {
     return { ok: false, status: 404, error: 'User not found.' };
   }
 
-  const cleanUsername = updates.username ? updates.username.trim() : existing.username;
-  const usernameLower = cleanUsername.toLowerCase();
-
-  if (updates.username) {
-    const conflicting = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(and(eq(users.usernameLower, usernameLower), ne(users.id, userId)))
-      .limit(1);
-
-    if (conflicting.length > 0) {
-      return { ok: false, status: 409, error: `Username "${cleanUsername}" is already taken.` };
-    }
-  }
-
-  let nextPasswordHash = existing.passwordHash;
+  // Verify and hash passwords outside the DB transaction so scrypt work doesn't hold DB locks.
+  let hashedNewPassword: string | null = null;
   let passwordChanged = false;
 
   if (updates.newPassword !== undefined) {
     if (!updates.currentPassword) {
       return { ok: false, status: 400, error: 'Current password is required to set a new password.' };
     }
-    const matches = await verifyPassword(updates.currentPassword, existing.passwordHash);
+    const matches = await verifyPassword(updates.currentPassword, initial.passwordHash);
     if (!matches) {
       return { ok: false, status: 403, error: 'Current password is incorrect.' };
     }
-    nextPasswordHash = await hashPassword(updates.newPassword);
+    hashedNewPassword = await hashPassword(updates.newPassword);
     passwordChanged = true;
   }
 
-  const now = new Date().toISOString();
-  await db
-    .update(users)
-    .set({
-      username: cleanUsername,
-      usernameLower,
-      passwordHash: nextPasswordHash,
-      updatedAt: now
-    })
-    .where(eq(users.id, userId));
+  const cleanUsername = updates.username ? updates.username.trim() : initial.username;
+  const usernameLower = cleanUsername.toLowerCase();
 
-  if (passwordChanged) {
-    await deleteSessionsForUser(userId, currentSessionId);
+  try {
+    return await db.transaction(async (tx) => {
+      const existingRows = await tx
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+
+      const existing = existingRows[0];
+      if (!existing) {
+        return { ok: false, status: 404, error: 'User not found.' };
+      }
+
+      const targetUsername = updates.username ? cleanUsername : existing.username;
+      const targetUsernameLower = targetUsername.toLowerCase();
+
+      if (updates.username) {
+        const conflicting = await tx
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.usernameLower, targetUsernameLower), ne(users.id, userId)))
+          .limit(1);
+
+        if (conflicting.length > 0) {
+          return { ok: false, status: 409, error: `Username "${targetUsername}" is already taken.` };
+        }
+      }
+
+      const now = new Date().toISOString();
+      const nextPasswordHash = hashedNewPassword ?? existing.passwordHash;
+
+      await tx
+        .update(users)
+        .set({
+          username: targetUsername,
+          usernameLower: targetUsernameLower,
+          passwordHash: nextPasswordHash,
+          updatedAt: now
+        })
+        .where(eq(users.id, userId));
+
+      if (passwordChanged) {
+        await deleteSessionsForUser(userId, currentSessionId, tx);
+      }
+
+      return {
+        ok: true,
+        data: toPublicUser({
+          id: existing.id,
+          username: targetUsername,
+          role: existing.role,
+          createdAt: existing.createdAt,
+          updatedAt: now
+        })
+      };
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return { ok: false, status: 409, error: `Username "${cleanUsername}" is already taken.` };
+    }
+    throw err;
   }
-
-  return {
-    ok: true,
-    data: toPublicUser({
-      id: existing.id,
-      username: cleanUsername,
-      role: existing.role,
-      createdAt: existing.createdAt,
-      updatedAt: now
-    })
-  };
 }
