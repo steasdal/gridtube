@@ -255,6 +255,10 @@ async function withPgBootstrapLock<T>(
   fn: (client: PoolClient) => Promise<T>
 ): Promise<T> {
   const lockClient = await pool.connect();
+  const onLockClientError = (err: Error) => {
+    logger.warn('db.bootstrap_lock.client_error', { err });
+  };
+  lockClient.on('error', onLockClientError);
   let lockAcquired = false;
   try {
     await lockClient.query('SELECT pg_advisory_lock($1, $2)', [
@@ -285,6 +289,7 @@ async function withPgBootstrapLock<T>(
         releaseError = unlockErr instanceof Error ? unlockErr : new Error(String(unlockErr));
       }
     }
+    lockClient.off('error', onLockClientError);
     lockClient.release(releaseError);
   }
 }
@@ -296,7 +301,17 @@ async function createDbContext(): Promise<DbContext> {
 
   if (databaseUrl) {
     const poolMax = getPgPoolMax();
-    const pool = new Pool({ connectionString: databaseUrl, max: poolMax });
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      max: poolMax,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+      keepAlive: true,
+      keepAliveInitialDelayMillis: 10_000
+    });
+    pool.on('error', (err) => {
+      logger.warn('db.pool.idle_client_error', { err });
+    });
     try {
       await withPgBootstrapLock(pool, async (lockClient) => {
         const lockedPgDb = drizzlePg(lockClient, { schema });
